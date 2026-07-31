@@ -280,7 +280,7 @@ def build_prompt(
         f"질문: {ex['question']}\n{name}: {ex['answer']}"
         for ex in profile.get("response_examples", [])
     ) or "- 없음"
-
+    
     return f'''
 당신은 추리 게임 《{game['title']}》의 NPC '{name}'다.
 현재 상황: {game['current_situation']}
