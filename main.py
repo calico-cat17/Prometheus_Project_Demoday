@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 import pygame
 
 try:
-    from back.score.inference import evaluate_deduction
+    from back.score import evaluate_deduction
 except Exception as exc:
     evaluate_deduction = None
     EVALUATOR_IMPORT_ERROR = exc
@@ -96,7 +96,10 @@ def find_korean_font() -> Optional[str]:
 
 
 pygame.init()
-pygame.key.start_text_input()
+# 텍스트 입력(IME)은 대화/추론 입력창에서만 켠다. 항상 켜두면 한글 입력기가
+# 켜져 있을 때 WASD 같은 이동 키 입력을 IME가 가로채서 이동이 안 되는
+# 문제가 생긴다.
+pygame.key.stop_text_input()
 pygame.display.set_caption("봉인된 모의고사")
 
 fullscreen = START_FULLSCREEN
@@ -296,6 +299,7 @@ class GameState:
     result_scroll: int = 0
     notification: str = ""
     notification_until: int = 0
+    note_open: bool = False
 
     def add_clue(self, clue_id: str) -> None:
         if clue_id not in self.discovered:
@@ -311,6 +315,7 @@ dialogue_session = GameSession() if GameSession is not None else None
 SHOW_COLLISION_DEBUG = False
 START_BUTTON_RECT = pygame.Rect(440, 610, 240, 54)
 RETRY_BUTTON_RECT = pygame.Rect(455, 596, 210, 50)
+NOTE_ICON_RECT = pygame.Rect(1060, 50, 40, 40)
 
 
 # ------------------------------------------------------------
@@ -510,7 +515,7 @@ doors: List[Door] = [
     Door(
         id="door_print",
         name="인쇄실 문",
-        rect=pygame.Rect(206, 244, 56, 15),
+        rect=pygame.Rect(221, 244, 56, 15),
         orientation="horizontal",
         room_a="hall",
         room_b="print_room",
@@ -519,7 +524,7 @@ doors: List[Door] = [
     Door(
         id="door_teacher",
         name="강사실 문",
-        rect=pygame.Rect(520, 244, 54, 15),
+        rect=pygame.Rect(432, 244, 54, 15),
         orientation="horizontal",
         room_a="hall",
         room_b="teacher_room",
@@ -528,7 +533,7 @@ doors: List[Door] = [
     Door(
         id="door_principal",
         name="원장실 문",
-        rect=pygame.Rect(885, 244, 54, 15),
+        rect=pygame.Rect(778, 244, 54, 15),
         orientation="horizontal",
         room_a="hall",
         room_b="principal_room",
@@ -619,15 +624,7 @@ objects: List[Interactable] = [
         pygame.Rect(125, 415, 130, 70),
         ["monitor_chat"],
     ),
-    Interactable(
-        "judge",
-        "judge",
-        "사건 추론함",
-        pygame.Rect(500, 585, 170, 62),
-    ),
 ]
-
-objects = [obj for obj in objects if obj.kind != "judge"]
 
 for npc_id, npc in NPCS.items():
     x, y = npc["pos"]
@@ -645,7 +642,7 @@ for npc_id, npc in NPCS.items():
 # ------------------------------------------------------------
 # 플레이어 / 충돌
 # ------------------------------------------------------------
-player = pygame.Rect(545, 650, 28, 36)
+player = pygame.Rect(500, 570, 28, 36)
 player_speed = 3.2
 
 
@@ -654,23 +651,23 @@ walls = [
     # --------------------------------------------------------
     # 바깥 경계
     # --------------------------------------------------------
-    pygame.Rect(0, 0, WIDTH, 18),
-    pygame.Rect(0, 0, 28, HEIGHT),
-    pygame.Rect(WIDTH - 28, 0, 28, HEIGHT),
+    pygame.Rect(0, 0, WIDTH, 80),
+    pygame.Rect(0, 0, 40, HEIGHT),
+    pygame.Rect(WIDTH - 80, 0, 80, HEIGHT),
     pygame.Rect(0, HEIGHT - 16, WIDTH, 16),
 
     # --------------------------------------------------------
     # 상단 세 방의 아래 벽
     # 실제 문 구간은 비워 둔다.
     # --------------------------------------------------------
-    pygame.Rect(35, 244, 171, 16),
-    pygame.Rect(262, 244, 258, 16),
-    pygame.Rect(574, 244, 311, 16),
-    pygame.Rect(939, 244, 146, 16),
+    pygame.Rect(30, 244, 190, 40),
+    pygame.Rect(276, 244, 156, 40),
+    pygame.Rect(490, 244, 281, 40),
+    pygame.Rect(839, 244, 252, 40),
 
     # 상단 방 사이 세로 벽
     pygame.Rect(329, 18, 16, 226),
-    pygame.Rect(758, 18, 16, 226),
+    pygame.Rect(722, 18, 16, 226),
 
     # --------------------------------------------------------
     # 상담실 외벽
@@ -696,18 +693,18 @@ walls = [
     # 중앙 안내 데스크
     # 책상 전체가 아니라 실제 카운터 부분만 막는다.
     # --------------------------------------------------------
-    pygame.Rect(420, 409, 304, 104),
+    pygame.Rect(410, 409, 250, 104),
 
     # --------------------------------------------------------
     # 최소한의 가구 충돌
     # 이동 가능 공간이 지나치게 좁아지지 않도록 핵심 가구만 사용
     # --------------------------------------------------------
     # 인쇄실
-    pygame.Rect(91, 56, 126, 94),       # 복사기
-    pygame.Rect(277, 64, 42, 118),      # 우측 수납장
+    pygame.Rect(91, 56, 140, 94),       # 복사기
+    pygame.Rect(277, 64, 42, 180),      # 우측 수납장
 
     # 강사실
-    pygame.Rect(374, 113, 85, 64),      # 왼쪽 책상
+    pygame.Rect(350, 113, 85, 64),      # 왼쪽 책상
     pygame.Rect(471, 113, 87, 64),      # 가운데 책상
     pygame.Rect(579, 113, 104, 64),     # 오른쪽 책상
 
@@ -716,11 +713,16 @@ walls = [
     pygame.Rect(1001, 57, 53, 80),      # 금고/수납장
 
     # 상담실
-    pygame.Rect(66, 463, 90, 72),       # 원형 탁자
-    pygame.Rect(177, 475, 111, 73),      # 컴퓨터 책상
+    pygame.Rect(66, 475, 70, 64),       # 원형 탁자
+    pygame.Rect(177, 480, 80, 73),      # 컴퓨터 책상
 
     # 교실
-    pygame.Rect(839, 474, 205, 116),    # 학생 책상 영역
+    pygame.Rect(820, 450,220, 50),    # 학생 책상 영역
+
+    # 아래쪽 화단
+    pygame.Rect(0, HEIGHT- 40 , 100 , 100)
+
+    
 ]
 
 
@@ -1185,6 +1187,20 @@ def draw_pixel_panel(
     pygame.draw.rect(screen, border, rect, 2, border_radius=8)
 
 
+def draw_note_icon(rect: pygame.Rect) -> None:
+    """사건노트 펼치기/접기 아이콘. 눌린 상태(펼침)일 때 살짝 밝게 표시한다."""
+    draw_pixel_panel(rect, fill=(48, 33, 24) if state.note_open else (40, 28, 22), shadow=False)
+
+    inner = rect.inflate(-14, -12)
+    pygame.draw.rect(screen, (232, 200, 150), inner, border_radius=2)
+
+    for i in range(3):
+        line_y = inner.y + 5 + i * 6
+        pygame.draw.line(
+            screen, (94, 66, 40), (inner.x + 3, line_y), (inner.right - 3, line_y), 2,
+        )
+
+
 def draw_hud() -> None:
     # 상단 타이틀 바
     pygame.draw.rect(screen, (23, 16, 13), (0, 0, WIDTH, 40))
@@ -1193,7 +1209,7 @@ def draw_hud() -> None:
     draw_text(screen, "봉인된 모의고사", (18, 8), FONT, COLORS["light"])
     draw_text(
         screen,
-        "WASD 이동  |  Q 상호작용  |  F2 충돌영역  |  F11 전체화면",
+        "WASD 이동  |  Q 상호작용  |  / 추리 제출  |  F11 전체화면",
         (695, 11),
         FONT_SM,
         COLORS["muted"],
@@ -1216,30 +1232,33 @@ def draw_hud() -> None:
         COLORS["light"],
     )
 
-    # 사건 노트
-    note_rect = pygame.Rect(875, 50, 225, 122)
-    draw_pixel_panel(note_rect, fill=(34, 24, 20))
+    # 사건 노트 — 우측 상단 아이콘을 누르면 펼쳐지고, 다시 누르면 접힌다.
+    draw_note_icon(NOTE_ICON_RECT)
 
-    draw_text(
-        screen,
-        f"사건노트  {len(state.discovered)}",
-        (890, 63),
-        FONT_SM,
-        COLORS["light"],
-    )
+    if state.note_open:
+        note_rect = pygame.Rect(825, 96, 275, 122)
+        draw_pixel_panel(note_rect, fill=(34, 24, 20))
 
-    y = 88
-    for clue_id in state.discovered[-4:]:
         draw_text(
             screen,
-            "• " + CLUES[clue_id]["name"],
-            (890, y),
+            f"사건노트  {len(state.discovered)}",
+            (840, 109),
             FONT_SM,
-            COLORS["text"],
-            max_width=195,
-            line_gap=2,
+            COLORS["light"],
         )
-        y += 20
+
+        y = 134
+        for clue_id in state.discovered[-4:]:
+            draw_text(
+                screen,
+                "• " + CLUES[clue_id]["name"],
+                (840, y),
+                FONT_SM,
+                COLORS["text"],
+                max_width=245,
+                line_gap=2,
+            )
+            y += 20
 
     if state.mode != "play":
         return
@@ -1902,7 +1921,8 @@ def draw_start_screen() -> None:
     controls = [
         "W/A/S/D : 이동",
         "Q : 조사 / 대화 / 문 열기",
-        "Enter : 입력 / 최종 추리 제출",
+        "Enter : 입력",
+        "/ : 최종 추리 제출",
         "ESC : 창 닫기 / 게임 종료",
     ]
 
@@ -2562,6 +2582,24 @@ def move_player(keys) -> None:
         player.y = old.y
 
 
+TEXT_INPUT_MODES = ("dialogue", "judge")
+
+
+def set_mode(mode: str) -> None:
+    """모드를 바꾸면서 텍스트 입력(IME)도 함께 켜고 끈다.
+
+    텍스트 입력을 항상 켜두면 한글 입력기가 켜져 있는 상태에서 WASD 같은
+    이동 키를 IME가 가로채 버리고, Q로 대화창을 여는 순간의 'q' 키 입력이
+    그대로 입력창에 찍혀버리는 문제가 있었다. 그래서 실제로 텍스트를 입력받는
+    dialogue/judge 모드에 들어갈 때만 켜고, 벗어나면 바로 끈다.
+    """
+    if mode in TEXT_INPUT_MODES:
+        pygame.key.start_text_input()
+    else:
+        pygame.key.stop_text_input()
+    state.mode = mode
+
+
 def handle_q() -> None:
     if toggle_near_door():
         return
@@ -2573,19 +2611,19 @@ def handle_q() -> None:
 
     if near.kind == "clue":
         state.active_clue = near.id
-        state.mode = "clue"
+        set_mode("clue")
 
     elif near.kind == "npc":
         state.active_npc = near.npc_id
         state.input_text = ""
         state.composing_text = ""
         state.last_reply = NPCS[near.npc_id]["intro"]
-        state.mode = "dialogue"
+        set_mode("dialogue")
 
     elif near.kind == "judge":
         state.input_text = ""
         state.composing_text = ""
-        state.mode = "judge"
+        set_mode("judge")
 
 
 def submit_dialogue() -> None:
@@ -2619,7 +2657,7 @@ def submit_judge() -> None:
     state.judge_result = None
     state.result_scroll = 0
     state.judging = True
-    state.mode = "judging"
+    set_mode("judging")
 
     def worker() -> None:
         state.judge_result = judge_answer(answer, discovered)
@@ -2636,13 +2674,13 @@ def submit_judge() -> None:
 def open_judge_template() -> None:
     state.input_text = ""
     state.composing_text = ""
-    state.mode = "judge"
+    set_mode("judge")
 
 
 def retry_game() -> None:
     global player
 
-    state.mode = "start"
+    set_mode("start")
     state.discovered.clear()
     state.conversation.clear()
     state.active_npc = None
@@ -2705,9 +2743,11 @@ def main() -> None:
                 and event.button == 1
             ):
                 if state.mode == "start" and START_BUTTON_RECT.collidepoint(event.pos):
-                    state.mode = "play"
+                    set_mode("play")
                 elif state.mode == "result" and RETRY_BUTTON_RECT.collidepoint(event.pos):
                     retry_game()
+                elif state.mode != "start" and NOTE_ICON_RECT.collidepoint(event.pos):
+                    state.note_open = not state.note_open
 
             elif event.type == pygame.MOUSEWHEEL:
                 if state.mode == "result":
@@ -2746,7 +2786,7 @@ def main() -> None:
                         "judge",
                         "result",
                     ]:
-                        state.mode = "play"
+                        set_mode("play")
                         state.input_text = ""
                         state.composing_text = ""
                     else:
@@ -2754,7 +2794,7 @@ def main() -> None:
 
                 elif state.mode == "start":
                     if event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                        state.mode = "play"
+                        set_mode("play")
 
                 elif state.mode == "play":
                     if event.key == pygame.K_q:
