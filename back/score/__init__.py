@@ -1,6 +1,6 @@
 """추리 게임 채점 모듈."""
 
-from .qwen_evaluator import (
+from .score import (
     CASE_CONFIG,
     EvaluationResult,
     OpenAIAPI,
