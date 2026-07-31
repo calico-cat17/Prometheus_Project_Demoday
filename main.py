@@ -2,10 +2,28 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 import pygame
+
+try:
+    from back.score.inference import evaluate_deduction
+except Exception as exc:
+    evaluate_deduction = None
+    EVALUATOR_IMPORT_ERROR = exc
+else:
+    EVALUATOR_IMPORT_ERROR = None
+
+try:
+    from game_engine import GameSession, handle_player_message
+except Exception as exc:
+    GameSession = None
+    handle_player_message = None
+    GAME_ENGINE_IMPORT_ERROR = exc
+else:
+    GAME_ENGINE_IMPORT_ERROR = None
 
 
 # ============================================================
@@ -122,22 +140,28 @@ def draw_text(
     x, y = pos
 
     if max_width is None:
-        surface.blit(font.render(text, True, color), (x, y))
-        return y + font.get_height()
+        for line in text.splitlines() or [""]:
+            surface.blit(font.render(line, True, color), (x, y))
+            y += font.get_height() + line_gap
+        return y
 
     lines: List[str] = []
-    current = ""
 
-    for ch in text:
-        test = current + ch
-        if font.size(test)[0] <= max_width or not current:
-            current = test
-        else:
+    for paragraph in text.splitlines() or [""]:
+        current = ""
+
+        for ch in paragraph:
+            test = current + ch
+            if font.size(test)[0] <= max_width or not current:
+                current = test
+            else:
+                lines.append(current)
+                current = ch
+
+        if current:
             lines.append(current)
-            current = ch
-
-    if current:
-        lines.append(current)
+        elif not paragraph:
+            lines.append("")
 
     for line in lines:
         surface.blit(font.render(line, True, color), (x, y))
@@ -259,7 +283,7 @@ BACKGROUND = load_background()
 # ------------------------------------------------------------
 @dataclass
 class GameState:
-    mode: str = "start"  # start, play, clue, dialogue, judge, result
+    mode: str = "start"  # start, play, clue, dialogue, judge, judging, result
     discovered: List[str] = field(default_factory=list)
     conversation: Dict[str, List[str]] = field(default_factory=dict)
     active_npc: Optional[str] = None
@@ -268,6 +292,8 @@ class GameState:
     composing_text: str = ""
     last_reply: str = ""
     judge_result: Optional[Dict] = None
+    judging: bool = False
+    result_scroll: int = 0
     notification: str = ""
     notification_until: int = 0
 
@@ -281,8 +307,10 @@ class GameState:
 
 
 state = GameState()
+dialogue_session = GameSession() if GameSession is not None else None
 SHOW_COLLISION_DEBUG = False
 START_BUTTON_RECT = pygame.Rect(440, 610, 240, 54)
+RETRY_BUTTON_RECT = pygame.Rect(455, 596, 210, 50)
 
 
 # ------------------------------------------------------------
@@ -599,6 +627,8 @@ objects: List[Interactable] = [
     ),
 ]
 
+objects = [obj for obj in objects if obj.kind != "judge"]
+
 for npc_id, npc in NPCS.items():
     x, y = npc["pos"]
     objects.append(
@@ -903,6 +933,61 @@ def judge_answer(answer: str, discovered: List[str]) -> Dict:
 # ------------------------------------------------------------
 # 배경 / 맵 렌더링
 # ------------------------------------------------------------
+def grade_from_percentage(percentage: float) -> str:
+    if percentage >= 90:
+        return "정답"
+    if percentage >= 70:
+        return "거의 정답"
+    if percentage >= 45:
+        return "부분 정답"
+    return "오답에 가까움"
+
+
+def judge_answer(answer: str, discovered: List[str]) -> Dict:
+    if evaluate_deduction is None:
+        return {
+            "score": 0,
+            "grade": "채점 불가",
+            "correct": [],
+            "missing": ["LLM 채점 모듈을 불러오지 못했습니다."],
+            "wrong": [],
+            "feedback": (
+                "back/score/inference.py import에 실패했습니다.\n"
+                f"오류: {type(EVALUATOR_IMPORT_ERROR).__name__}: {EVALUATOR_IMPORT_ERROR}"
+            ),
+        }
+
+    try:
+        result = evaluate_deduction(answer, debug=True)
+    except Exception as exc:
+        return {
+            "score": 0,
+            "grade": "채점 실패",
+            "correct": [],
+            "missing": [
+                "LLM 채점 호출에 실패했습니다.",
+                "OPENAI_API_KEY, openai 패키지 설치, 네트워크 연결을 확인하세요.",
+            ],
+            "wrong": [],
+            "feedback": f"{type(exc).__name__}: {exc}",
+        }
+
+    feedback = result.feedback
+    if result.details:
+        warnings = result.details.get("warnings") or []
+        if warnings:
+            feedback += "\n\n[채점 경고]\n" + "\n".join(f"- {item}" for item in warnings)
+
+    return {
+        "score": round(float(result.percentage), 1),
+        "grade": grade_from_percentage(float(result.percentage)),
+        "correct": [f"LLM 채점 완료: {result.score:.2f}/{result.max_score:.2f}점"],
+        "missing": [],
+        "wrong": [],
+        "feedback": feedback,
+    }
+
+
 def draw_fallback_map() -> None:
     screen.fill(COLORS["bg"])
 
@@ -2133,6 +2218,320 @@ def draw_result_window() -> None:
 # ------------------------------------------------------------
 # 업데이트 / 입력
 # ------------------------------------------------------------
+def draw_result_window() -> None:
+    rect = pygame.Rect(90, 50, 940, 620)
+    draw_panel(rect, "추리 결과")
+
+    result = state.judge_result
+    if result is None:
+        return
+
+    draw_text(
+        screen,
+        f"점수: {result['score']}점 | 판정: {result['grade']}",
+        (125, 115),
+        FONT_LG,
+        COLORS["light"],
+    )
+
+    y = 165
+    draw_text(screen, "맞은 부분", (125, y), FONT, COLORS["green"])
+    y += 34
+
+    for item in result["correct"]:
+        y = draw_text(
+            screen,
+            "- " + item,
+            (145, y),
+            FONT_SM,
+            COLORS["text"],
+            max_width=820,
+            line_gap=3,
+        )
+
+    y += 12
+    draw_text(screen, "부족한 부분", (125, y), FONT, COLORS["danger"])
+    y += 34
+
+    for item in result["missing"]:
+        y = draw_text(
+            screen,
+            "- " + item,
+            (145, y),
+            FONT_SM,
+            COLORS["text"],
+            max_width=820,
+            line_gap=3,
+        )
+
+    y += 12
+    draw_text(screen, "피드백", (125, y), FONT, COLORS["light"])
+    y += 34
+
+    draw_text(
+        screen,
+        result["feedback"],
+        (145, y),
+        FONT,
+        COLORS["text"],
+        max_width=820,
+    )
+
+    mouse_pos = pygame.mouse.get_pos()
+    hovering = RETRY_BUTTON_RECT.collidepoint(mouse_pos)
+    button_fill = (92, 54, 34) if hovering else (70, 42, 30)
+    pygame.draw.rect(
+        screen,
+        (8, 6, 5),
+        RETRY_BUTTON_RECT.move(5, 5),
+        border_radius=10,
+    )
+    pygame.draw.rect(screen, button_fill, RETRY_BUTTON_RECT, border_radius=10)
+    pygame.draw.rect(screen, COLORS["light"], RETRY_BUTTON_RECT, 2, border_radius=10)
+
+    button_text = "RETRY"
+    draw_text(
+        screen,
+        button_text,
+        (
+            RETRY_BUTTON_RECT.centerx - FONT_LG.size(button_text)[0] // 2,
+            RETRY_BUTTON_RECT.y + 9,
+        ),
+        FONT_LG,
+        COLORS["light"],
+    )
+
+    draw_text(screen, "ESC: 돌아가기", (805, 625), FONT_SM, COLORS["muted"])
+
+
+def compact_feedback_text(text: str) -> str:
+    lines = []
+    previous_blank = False
+
+    for raw_line in str(text).splitlines():
+        line = raw_line.strip()
+        if not line:
+            if not previous_blank and lines:
+                lines.append("")
+            previous_blank = True
+            continue
+        lines.append(line)
+        previous_blank = False
+
+    return "\n".join(lines).strip()
+
+
+def draw_text_limited(
+    surface: pygame.Surface,
+    text: str,
+    pos,
+    font,
+    color,
+    max_width: int,
+    max_height: int,
+    line_gap: int = 2,
+) -> int:
+    x, y = pos
+    bottom = y + max_height
+    lines: List[str] = []
+
+    for paragraph in compact_feedback_text(text).splitlines() or [""]:
+        current = ""
+
+        for ch in paragraph:
+            test = current + ch
+            if font.size(test)[0] <= max_width or not current:
+                current = test
+            else:
+                lines.append(current)
+                current = ch
+
+        if current:
+            lines.append(current)
+        elif not paragraph:
+            lines.append("")
+
+    for index, line in enumerate(lines):
+        next_y = y + font.get_height()
+        if next_y > bottom:
+            surface.blit(font.render("...", True, COLORS["muted"]), (x, y))
+            return y + font.get_height()
+
+        if line:
+            surface.blit(font.render(line, True, color), (x, y))
+        y += font.get_height() + line_gap
+
+    return y
+
+
+def wrapped_lines(text: str, font, max_width: int) -> List[str]:
+    lines: List[str] = []
+
+    for paragraph in compact_feedback_text(text).splitlines() or [""]:
+        current = ""
+
+        for ch in paragraph:
+            test = current + ch
+            if font.size(test)[0] <= max_width or not current:
+                current = test
+            else:
+                lines.append(current)
+                current = ch
+
+        if current:
+            lines.append(current)
+        elif not paragraph:
+            lines.append("")
+
+    return lines
+
+
+def max_result_scroll() -> int:
+    if not state.judge_result:
+        return 0
+
+    line_count = len(wrapped_lines(state.judge_result["feedback"], FONT_XS, 874))
+    visible_lines = 24
+    return max(0, line_count - visible_lines)
+
+
+def scroll_result(delta: int) -> None:
+    state.result_scroll = max(
+        0,
+        min(max_result_scroll(), state.result_scroll + delta),
+    )
+
+
+def draw_scrollable_text(
+    surface: pygame.Surface,
+    text: str,
+    rect: pygame.Rect,
+    font,
+    color,
+    line_gap: int = 1,
+) -> None:
+    lines = wrapped_lines(text, font, rect.width)
+    line_height = font.get_height() + line_gap
+    visible_count = max(1, rect.height // line_height)
+    max_scroll = max(0, len(lines) - visible_count)
+    state.result_scroll = max(0, min(max_scroll, state.result_scroll))
+
+    clip = surface.get_clip()
+    surface.set_clip(rect)
+
+    y = rect.y
+    for line in lines[state.result_scroll:state.result_scroll + visible_count]:
+        if line:
+            surface.blit(font.render(line, True, color), (rect.x, y))
+        y += line_height
+
+    surface.set_clip(clip)
+
+    if max_scroll > 0:
+        track = pygame.Rect(rect.right + 8, rect.y, 6, rect.height)
+        pygame.draw.rect(surface, (60, 43, 35), track, border_radius=3)
+
+        thumb_height = max(24, int(rect.height * visible_count / len(lines)))
+        thumb_y = rect.y + int((rect.height - thumb_height) * state.result_scroll / max_scroll)
+        thumb = pygame.Rect(track.x, thumb_y, track.width, thumb_height)
+        pygame.draw.rect(surface, COLORS["light"], thumb, border_radius=3)
+
+
+
+def draw_result_window() -> None:
+    rect = pygame.Rect(70, 34, 980, 650)
+    draw_panel(rect, "추리 결과")
+
+    result = state.judge_result
+    if result is None:
+        return
+
+    draw_text(
+        screen,
+        f"점수: {result['score']}점 | 판정: {result['grade']}",
+        (105, 92),
+        FONT,
+        COLORS["light"],
+    )
+
+    feedback_rect = pygame.Rect(105, 132, 910, 430)
+    pygame.draw.rect(screen, (25, 18, 16), feedback_rect, border_radius=8)
+    pygame.draw.rect(screen, COLORS["line"], feedback_rect, 1, border_radius=8)
+
+    draw_text(screen, "피드백", (feedback_rect.x + 18, feedback_rect.y + 14), FONT_SM, COLORS["light"])
+    draw_scrollable_text(
+        screen,
+        result["feedback"],
+        pygame.Rect(
+            feedback_rect.x + 18,
+            feedback_rect.y + 44,
+            feedback_rect.width - 54,
+            feedback_rect.height - 70,
+        ),
+        FONT_XS,
+        COLORS["text"],
+        line_gap=1,
+    )
+
+    mouse_pos = pygame.mouse.get_pos()
+    hovering = RETRY_BUTTON_RECT.collidepoint(mouse_pos)
+    button_fill = (92, 54, 34) if hovering else (70, 42, 30)
+    pygame.draw.rect(
+        screen,
+        (8, 6, 5),
+        RETRY_BUTTON_RECT.move(5, 5),
+        border_radius=10,
+    )
+    pygame.draw.rect(screen, button_fill, RETRY_BUTTON_RECT, border_radius=10)
+    pygame.draw.rect(screen, COLORS["light"], RETRY_BUTTON_RECT, 2, border_radius=10)
+
+    button_text = "RETRY"
+    draw_text(
+        screen,
+        button_text,
+        (
+            RETRY_BUTTON_RECT.centerx - FONT_LG.size(button_text)[0] // 2,
+            RETRY_BUTTON_RECT.y + 9,
+        ),
+        FONT_LG,
+        COLORS["light"],
+    )
+
+    draw_text(screen, "ESC: 돌아가기", (806, 632), FONT_XS, COLORS["muted"])
+
+
+def draw_judging_window() -> None:
+    rect = pygame.Rect(330, 245, 460, 190)
+    draw_panel(rect, "사건 추론 중")
+
+    ticks = pygame.time.get_ticks()
+    dots = "." * ((ticks // 450) % 4)
+    message = "LLM이 추리를 채점하고 있습니다" + dots
+
+    draw_text(
+        screen,
+        message,
+        (
+            rect.centerx - FONT.size(message)[0] // 2,
+            rect.y + 72,
+        ),
+        FONT,
+        COLORS["text"],
+    )
+
+    sub = "잠시만 기다려 주세요"
+    draw_text(
+        screen,
+        sub,
+        (
+            rect.centerx - FONT_SM.size(sub)[0] // 2,
+            rect.y + 112,
+        ),
+        FONT_SM,
+        COLORS["muted"],
+    )
+
+
 def move_player(keys) -> None:
     dx = 0.0
     dy = 0.0
@@ -2195,7 +2594,13 @@ def submit_dialogue() -> None:
 
     npc_id = state.active_npc
     question = state.input_text.strip()
-    reply = npc_reply(npc_id, question, state.discovered)
+    if dialogue_session is not None and handle_player_message is not None:
+        dialogue_session.sync_discovered_clues(state.discovered)
+        reply = handle_player_message(npc_id, question, dialogue_session)
+    else:
+        reply = npc_reply(npc_id, question, state.discovered)
+        if GAME_ENGINE_IMPORT_ERROR is not None:
+            reply += f"\n\n[대화 엔진 오류: {type(GAME_ENGINE_IMPORT_ERROR).__name__}]"
 
     state.last_reply = reply
     state.conversation.setdefault(npc_id, []).append(f"P: {question}")
@@ -2207,17 +2612,56 @@ def submit_judge() -> None:
     if not state.input_text.strip():
         return
 
-    state.judge_result = judge_answer(
-        state.input_text.strip(),
-        state.discovered,
-    )
+    answer = state.input_text.strip()
+    discovered = list(state.discovered)
     state.input_text = ""
-    state.mode = "result"
+    state.composing_text = ""
+    state.judge_result = None
+    state.result_scroll = 0
+    state.judging = True
+    state.mode = "judging"
+
+    def worker() -> None:
+        state.judge_result = judge_answer(answer, discovered)
+        state.result_scroll = 0
+        state.judging = False
+        state.mode = "result"
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 # ------------------------------------------------------------
 # 메인 루프
 # ------------------------------------------------------------
+def open_judge_template() -> None:
+    state.input_text = ""
+    state.composing_text = ""
+    state.mode = "judge"
+
+
+def retry_game() -> None:
+    global player
+
+    state.mode = "start"
+    state.discovered.clear()
+    state.conversation.clear()
+    state.active_npc = None
+    state.active_clue = None
+    state.input_text = ""
+    state.composing_text = ""
+    state.last_reply = ""
+    state.judge_result = None
+    state.judging = False
+    state.result_scroll = 0
+    state.notification = ""
+    state.notification_until = 0
+    if dialogue_session is not None:
+        dialogue_session.reset()
+    for door in doors:
+        door.open = False
+    player = pygame.Rect(545, 650, 28, 36)
+
+
 def active_input_limit() -> int:
     if state.mode == "dialogue":
         return 90
@@ -2259,10 +2703,15 @@ def main() -> None:
             elif (
                 event.type == pygame.MOUSEBUTTONDOWN
                 and event.button == 1
-                and state.mode == "start"
             ):
-                if START_BUTTON_RECT.collidepoint(event.pos):
+                if state.mode == "start" and START_BUTTON_RECT.collidepoint(event.pos):
                     state.mode = "play"
+                elif state.mode == "result" and RETRY_BUTTON_RECT.collidepoint(event.pos):
+                    retry_game()
+
+            elif event.type == pygame.MOUSEWHEEL:
+                if state.mode == "result":
+                    scroll_result(-event.y * 3)
 
             elif event.type == pygame.TEXTEDITING:
                 if state.mode in ("dialogue", "judge"):
@@ -2287,6 +2736,10 @@ def main() -> None:
                     toggle_fullscreen()
 
                 elif event.key == pygame.K_ESCAPE:
+                    if state.mode == "judging":
+                        state.notify("추론 중입니다. 잠시만 기다려 주세요.")
+                        continue
+
                     if state.mode in [
                         "clue",
                         "dialogue",
@@ -2306,6 +2759,8 @@ def main() -> None:
                 elif state.mode == "play":
                     if event.key == pygame.K_q:
                         handle_q()
+                    elif event.key == pygame.K_SLASH or event.unicode == "/":
+                        open_judge_template()
 
                 elif state.mode == "dialogue":
                     if event.key == pygame.K_RETURN:
@@ -2320,6 +2775,16 @@ def main() -> None:
                         submit_judge()
                     elif event.key == pygame.K_BACKSPACE:
                         state.input_text = state.input_text[:-1]
+
+                elif state.mode == "result":
+                    if event.key == pygame.K_DOWN:
+                        scroll_result(1)
+                    elif event.key == pygame.K_UP:
+                        scroll_result(-1)
+                    elif event.key == pygame.K_PAGEDOWN:
+                        scroll_result(8)
+                    elif event.key == pygame.K_PAGEUP:
+                        scroll_result(-8)
 
         if state.mode == "play":
             keys = pygame.key.get_pressed()
@@ -2344,6 +2809,8 @@ def main() -> None:
             draw_dialogue_window()
         elif state.mode == "judge":
             draw_judge_window()
+        elif state.mode == "judging":
+            draw_judging_window()
         elif state.mode == "result":
             draw_result_window()
 
