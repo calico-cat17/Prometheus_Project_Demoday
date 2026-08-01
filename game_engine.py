@@ -15,7 +15,7 @@ import json as _json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -87,29 +87,42 @@ GAME_INFO = load_game_info()
 PROFILES = load_all_profiles()
 
 
-# 2D 탐색으로 단서를 발견했을 때 보여줄 설명
-EVIDENCE_DESCRIPTIONS = {
-    "등원 기록": "데스크에 06시 30분 준이 학생 등원 기록이 남아 있다.",
-    "강의 시간표": "강사실 강의 시간표에는 22시 30분에 강의가 종료되는 것으로 나와 있다.",
-    "복사기": "인쇄실 복사기에 밤 10시 30분과 새벽 3시 20분 시험지 스캔 기록이 있다.",
-    "상담 예약표": "원장실 상담 예약표에 이찬형 상담실장이 아침 8시 상담 예정이라고 적혀 있다.",
-    "성과급 평가표": "원장실 성과급 평가표에 전국 모의고사 평균, 정예반 유지율 등이 기준으로 적혀 있다.",
-    "금고 키패드 지문": "원장실 금고 키패드에 지문이 거의 남아있지 않고 닦아낸 흔적이 있다.",
-    "분필통": "강사실 홍지연 자리에 분필통이 있다.",
-    "계좌 번호가 적힌 메모장": "인쇄실 쓰레기통에서 상담실장 계좌번호가 적힌 메모가 발견됐다.",
-    "상담실 모니터": "상담실 모니터에서 학부모와 '인쇄실 쓰레기통에 있는 계좌로 보내주세요'라는 대화가 발견됐다.",
+# main.py CLUES 딕셔너리의 단서 id를 그대로 키로 쓴다.
+# (예전에는 이 딕셔너리가 한글 라벨을 키로 썼는데, main.py에서 넘어오는
+# discovered_clues는 항상 CLUES의 영문 id였기 때문에 서로 매칭될 일이 없어
+# direct_mentioned/undiscovered_mentioned가 사실상 항상 비어 있었다.)
+CLUE_KEYWORDS = {
+    "copy_log": ["복사기 로그", "복사기 기록", "스캔 기록", "복사 기록", "복사기 스캔"],
+    "white_powder": ["흰 가루", "하얀 가루", "가루가 묻", "유리면"],
+    "account_memo": ["계좌 번호", "계좌번호", "계좌 메모", "메모장에"],
+    "safe_keypad": ["금고 키패드", "키패드 지문", "금고 지문", "지문이 닦"],
+    "performance_sheet": ["성과급 평가표", "성과급", "평가표"],
+    "consult_schedule": ["상담 예약표", "상담예약표", "예약표", "상담 일정", "예약표에 별표"],
+    "chalk_box": ["분필통", "분필 통"],
+    "timetable": ["강의 시간표", "강의시간표", "수업 시간표"],
+    "attendance": ["등원 기록", "등원기록", "출석 기록", "출석기록"],
+    "postit_pw": ["포스트잇", "모니터 비밀번호", "컴퓨터 비밀번호"],
+    "monitor_chat": ["상담실 모니터", "모니터 대화", "모니터에서"],
+    "principal_monitor_log": ["최근 열람 문서", "열람 문서", "금고 관리 파일"],
+    "safe_open_log": ["금고 개방 기록", "금고 개방", "전자 금고 개방"],
 }
 
-CLUE_KEYWORDS = {
-    "등원 기록": ["등원 기록", "등원기록", "출석 기록", "출석기록", "몇 시에 왔"],
-    "강의 시간표": ["강의 시간표", "강의시간표", "수업 시간표", "시간표"],
-    "복사기": ["복사기", "복사기 로그", "스캔 기록", "복사 기록", "인쇄실 복사기"],
-    "상담 예약표": ["상담 예약표", "상담예약표", "예약표", "상담 일정"],
-    "성과급 평가표": ["성과급 평가표", "성과급", "평가표"],
-    "금고 키패드 지문": ["금고 키패드 지문", "금고 지문", "키패드 지문", "금고"],
-    "분필통": ["분필통", "분필 통"],
-    "계좌 번호가 적힌 메모장": ["계좌 번호", "계좌번호", "계좌 메모", "메모장"],
-    "상담실 모니터": ["상담실 모니터", "모니터"],
+# 프롬프트에 단서 id를 그대로 노출하지 않기 위한 한글 표시용 라벨.
+# main.py CLUES 딕셔너리의 "name" 값과 맞춰둔다.
+CLUE_LABELS = {
+    "copy_log": "복사기 스캔 기록",
+    "white_powder": "복사기 유리면의 흰 가루",
+    "account_memo": "계좌 번호 메모장",
+    "safe_keypad": "금고 키패드 지문",
+    "performance_sheet": "성과급 평가표",
+    "consult_schedule": "상담 예약표",
+    "chalk_box": "홍지연 자리의 분필통",
+    "timetable": "강의 시간표",
+    "attendance": "등원 기록",
+    "postit_pw": "원장실 모니터 포스트잇",
+    "monitor_chat": "상담실 모니터 대화",
+    "principal_monitor_log": "원장실 컴퓨터 최근 열람 문서",
+    "safe_open_log": "금고 개방 기록",
 }
 
 
@@ -235,9 +248,15 @@ def get_turn_reactions(
     return direct_mentioned, undiscovered_mentioned
 
 
-def prior_questions_summary(dialogue_history: list[dict[str, Any]], limit: int = 8) -> str:
+def prior_questions_summary(dialogue_history: list[dict[str, Any]], limit: int = 24) -> str:
     """대화 이력이 길어져 LLM에 보내는 윈도우 밖으로 밀려나도
-    이전에 어떤 질문을 받았는지 요약해서 일관성을 유지하도록 돕는다."""
+    이전에 어떤 질문을 받았는지 요약해서 일관성을 유지하도록 돕는다.
+
+    limit은 MAX_HISTORY_MESSAGES(윈도우가 직접 담는 유저 턴 수)보다 넉넉히
+    커야 의미가 있다. 예전엔 limit=8이 윈도우가 담는 유저 턴 수(16/2=8)와
+    정확히 같아서, 윈도우 밖으로 밀린 질문이 요약에도 전혀 안 남는 문제가 있었다.
+    QUESTION_LIMIT(게임 전체 공유 질문권)이 30이므로 한 NPC가 받을 수 있는
+    질문도 최대 30개라, 24면 넉넉히 커버된다."""
     questions: list[str] = []
     for item in dialogue_history:
         if item.get("role") == "user":
@@ -267,12 +286,12 @@ def build_prompt(
     policy = profile["conversation_policy"]
 
     direct_text = (
-        "\n".join(f"- {c}" for c in direct_mentioned)
+        "\n".join(f"- {CLUE_LABELS.get(c, c)}" for c in direct_mentioned)
         if direct_mentioned
         else "- 이번 질문에서 플레이어가 직접 제시한, 이미 발견된 단서는 없다."
     )
     undiscovered_text = (
-        "\n".join(f"- {c}" for c in undiscovered_mentioned)
+        "\n".join(f"- {CLUE_LABELS.get(c, c)}" for c in undiscovered_mentioned)
         if undiscovered_mentioned
         else "- 없음"
     )

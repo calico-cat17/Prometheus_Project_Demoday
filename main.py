@@ -17,17 +17,18 @@ else:
     EVALUATOR_IMPORT_ERROR = None
 
 try:
-    from game_engine import GameSession, handle_player_message
+    from game_engine import QUESTION_LIMIT, GameSession, handle_player_message
 except Exception as exc:
     GameSession = None
     handle_player_message = None
+    QUESTION_LIMIT = 30
     GAME_ENGINE_IMPORT_ERROR = exc
 else:
     GAME_ENGINE_IMPORT_ERROR = None
 
 
 # ============================================================
-# 봉인된 모의고사 - 2D 추리 게임 프로토타입
+# 프메학원 모의고사 유출사건 - 2D 추리 게임 프로토타입
 #
 # 조작
 #   WASD : 이동
@@ -100,7 +101,7 @@ pygame.init()
 # 켜져 있을 때 WASD 같은 이동 키 입력을 IME가 가로채서 이동이 안 되는
 # 문제가 생긴다.
 pygame.key.stop_text_input()
-pygame.display.set_caption("봉인된 모의고사")
+pygame.display.set_caption("프메학원 모의고사 유출사건")
 
 fullscreen = START_FULLSCREEN
 
@@ -288,18 +289,21 @@ BACKGROUND = load_background()
 class GameState:
     mode: str = "start"  # start, play, clue, dialogue, judge, judging, result
     discovered: List[str] = field(default_factory=list)
+    unlocked_clues: List[str] = field(default_factory=list)
     conversation: Dict[str, List[str]] = field(default_factory=dict)
     active_npc: Optional[str] = None
     active_clue: Optional[str] = None
     input_text: str = ""
     composing_text: str = ""
     last_reply: str = ""
+    npc_thinking: bool = False
     judge_result: Optional[Dict] = None
     judging: bool = False
     result_scroll: int = 0
     notification: str = ""
     notification_until: int = 0
     note_open: bool = False
+    selected_note_clue: Optional[str] = None
 
     def add_clue(self, clue_id: str) -> None:
         if clue_id not in self.discovered:
@@ -316,6 +320,7 @@ SHOW_COLLISION_DEBUG = False
 START_BUTTON_RECT = pygame.Rect(440, 610, 240, 54)
 RETRY_BUTTON_RECT = pygame.Rect(455, 596, 210, 50)
 NOTE_ICON_RECT = pygame.Rect(1060, 50, 40, 40)
+NOTE_CLUE_RECTS: list[tuple[str, pygame.Rect]] = []
 
 
 # ------------------------------------------------------------
@@ -337,7 +342,7 @@ CLUES = {
     "account_memo": {
         "name": "계좌 번호 메모장",
         "location": "인쇄실",
-        "desc": "인쇄실 쓰레기통에서 상담실장의 계좌번호가 적힌 메모장이 발견됐다.",
+        "desc": "메모장에 상담실장의 계좌번호가 적혀있다.",
         "tags": ["이찬형 핵심"],
     },
     "safe_keypad": {
@@ -349,25 +354,19 @@ CLUES = {
     "performance_sheet": {
         "name": "성과급 평가표",
         "location": "원장실",
-        "desc": "성과급 기준은 전국 모의고사 평균, 정예반 유지율, 우수 성적자 비율이다. 낮은 반 강사에게 불리하다.",
+        "desc": "강사들에 대한 평가와 성과급 기준이 적혀있다. 전국 모의고사 평균, 정예반 유지율, 우수 성적자 비율이 적혀있으며, 기초반 강사에게 불리하다.",
         "tags": ["홍지연 동기처럼 보임"],
     },
     "consult_schedule": {
         "name": "상담 예약표",
-        "location": "원장실",
-        "desc": "이찬형은 아침 8시 상담 예정이며, 예약표에 별표가 표시되어 있다.",
+        "location": "상담실",
+        "desc": "이찬형 상담실장의 상담 스케줄이 적혀있다. 아침 8시 상담 예정이며, 특정 이름에 별표가 표시되어 있다.",
         "tags": ["이찬형"],
-    },
-    "coffee_stain": {
-        "name": "상담실 앞 커피 자국",
-        "location": "복도",
-        "desc": "상담실 앞 복도 바닥에 커피를 쏟은 흔적이 있다. 누군가 급하게 움직인 듯하다.",
-        "tags": ["정황"],
     },
     "chalk_box": {
         "name": "홍지연 자리의 분필통",
         "location": "강사실",
-        "desc": "홍지연 자리에는 분필통이 있다. 복사기 유리면의 흰 가루와 연결될 수 있다.",
+        "desc": "홍지연 자리에는 분필통이 있다. 복사기 유리면의 흰 가루와 유사하다.",
         "tags": ["홍지연 미끼"],
     },
     "timetable": {
@@ -383,15 +382,30 @@ CLUES = {
         "tags": ["준이 미끼"],
     },
     "postit_pw": {
-        "name": "상담실 모니터 비밀번호 포스트잇",
-        "location": "상담실",
-        "desc": "상담실 모니터 비밀번호가 포스트잇에 적혀 있다. 보안이 허술하다.",
-        "tags": ["상담실"],
+        "name": "원장실 모니터 포스트잇",
+        "location": "원장실",
+        "desc": "원장실 모니터 옆에 컴퓨터 비밀번호가 적힌 포스트잇이 붙어 있다. 비밀번호: 0512",
+        "tags": ["이찬형 핵심"],
     },
     "monitor_chat": {
         "name": "상담실 모니터 대화",
         "location": "상담실",
         "desc": "학부모와의 대화에서 ‘같은 계좌로 보내주세요’라는 내용이 보인다. 인쇄실 메모장의 계좌와 같다.",
+        "tags": ["이찬형 핵심"],
+    },
+    "principal_monitor_log": {
+        "name": "원장실 컴퓨터 최근 열람 문서",
+        "location": "원장실",
+        "desc": "원장실 금고 비밀번호가 포함된 금고 관리 파일이 최근에 열람되었다.",
+        "tags": ["이찬형 핵심"],
+        "locked": True,
+        "unlock_requires": "postit_pw",
+        "unlock_password": "0512",
+    },
+    "safe_open_log": {
+        "name": "금고 개방 기록",
+        "location": "원장실",
+        "desc": "전자 금고 개방 기록에 새벽 3시 15분 개방 기록이 있다.",
         "tags": ["이찬형 핵심"],
     },
 }
@@ -580,27 +594,20 @@ objects: List[Interactable] = [
         "clue",
         "원장실 금고",
         pygame.Rect(980, 85, 75, 85),
-        ["safe_keypad"],
+        ["safe_keypad", "safe_open_log"],
     ),
     Interactable(
         "desk_docs",
         "clue",
-        "원장실 서류",
-        pygame.Rect(860, 125, 105, 62),
-        ["performance_sheet", "consult_schedule"],
-    ),
-    Interactable(
-        "coffee",
-        "clue",
-        "커피 자국",
-        pygame.Rect(760, 345, 95, 58),
-        ["coffee_stain"],
+        "원장실 책상",
+        pygame.Rect(820, 125, 105, 62),
+        ["performance_sheet", "postit_pw", "principal_monitor_log"],
     ),
     Interactable(
         "chalk",
         "clue",
         "분필통",
-        pygame.Rect(500, 110, 75, 55),
+        pygame.Rect(450, 110, 75, 55),
         ["chalk_box", "timetable"],
     ),
     Interactable(
@@ -613,15 +620,15 @@ objects: List[Interactable] = [
     Interactable(
         "postit",
         "clue",
-        "포스트잇",
+        "상담 예약표",
         pygame.Rect(112, 455, 55, 40),
-        ["postit_pw"],
+        ["consult_schedule"],
     ),
     Interactable(
         "monitor",
         "clue",
         "상담실 모니터",
-        pygame.Rect(125, 415, 130, 70),
+        pygame.Rect(170, 415, 110, 70),
         ["monitor_chat"],
     ),
 ]
@@ -705,16 +712,16 @@ walls = [
 
     # 강사실
     pygame.Rect(350, 113, 85, 64),      # 왼쪽 책상
-    pygame.Rect(471, 113, 87, 64),      # 가운데 책상
+    # pygame.Rect(471, 113, 87, 64),      # 가운데 책상
     pygame.Rect(579, 113, 104, 64),     # 오른쪽 책상
 
     # 원장실
-    pygame.Rect(834, 112, 171, 74),     # 큰 책상
+    # pygame.Rect(834, 112, 171, 74),     # 큰 책상
     pygame.Rect(1001, 57, 53, 80),      # 금고/수납장
 
     # 상담실
     pygame.Rect(66, 475, 70, 64),       # 원형 탁자
-    pygame.Rect(177, 480, 80, 73),      # 컴퓨터 책상
+    # pygame.Rect(177, 480, 80, 73),      # 컴퓨터 책상
 
     # 교실
     pygame.Rect(820, 450,220, 50),    # 학생 책상 영역
@@ -811,7 +818,7 @@ def npc_reply(npc_id: str, message: str, discovered: List[str]) -> str:
         if "분필" in msg or "가루" in msg:
             return "수업 끝나고 바로 갔으니까 손에 분필가루가 묻어 있었을 수는 있어요. 그걸로 제가 시험지를 봤다고 할 수는 없죠."
         if "성과급" in msg or "원장" in msg:
-            return "성과급 기준이 불공평하다고 항의한 건 사실이에요. 낮은 반을 맡으면 애초에 불리하니까요. 그래도 시험지를 훔칠 이유는 없어요."
+            return "성과급 기준이 불공평하다고 항의한 건 사실이에요. 기초반을 맡으면 애초에 불리하니까요. 그래도 시험지를 훔칠 이유는 없어요."
         return "저는 억울합니다. 어제 수업이 끝난 뒤 자료를 뽑고 바로 퇴근했어요."
 
     if npc_id == "sieun":
@@ -840,7 +847,6 @@ def npc_reply(npc_id: str, message: str, discovered: List[str]) -> str:
                 "monitor_chat",
                 "copy_log",
                 "consult_schedule",
-                "coffee_stain",
             ]
         )
 
@@ -863,73 +869,6 @@ def npc_reply(npc_id: str, message: str, discovered: List[str]) -> str:
         return "저는 상담 준비 때문에 일찍 왔을 뿐입니다. 시험지는 부원장님 담당 아닌가요?"
 
     return "잘 모르겠습니다."
-
-
-def judge_answer(answer: str, discovered: List[str]) -> Dict:
-    text = answer.lower()
-    score = 0
-    correct: List[str] = []
-    missing: List[str] = []
-    wrong: List[str] = []
-
-    if any(word in text for word in ["이찬형", "찬형", "상담실장"]):
-        score += 30
-        correct.append("범인을 이찬형 상담실장으로 지목했습니다.")
-    else:
-        wrong.append("범인 지목이 틀렸거나 불명확합니다. 핵심 범인은 이찬형입니다.")
-
-    if any(word in text for word in ["돈", "계좌", "학부모", "입금", "거래", "뇌물"]):
-        score += 20
-        correct.append("학부모와의 금전 거래 동기를 파악했습니다.")
-    else:
-        missing.append("학부모에게 돈을 받고 시험지를 유출했다는 동기 설명이 부족합니다.")
-
-    method_points = [
-        ("새벽 3시 학원 출입", ["새벽", "3시", "03"]),
-        ("금고 비밀번호 획득", ["비밀번호", "컴퓨터", "로그인"]),
-        ("금고에서 시험지 탈취", ["금고", "꺼내", "탈취"]),
-        ("03:20 인쇄실 스캔", ["3시 20", "03:20", "스캔", "복사기"]),
-        ("시험지를 다시 넣어둠", ["다시", "넣", "되돌", "봉투"]),
-    ]
-
-    for label, keywords in method_points:
-        if any(keyword in text for keyword in keywords):
-            score += 5
-            correct.append(label + " 과정을 언급했습니다.")
-        else:
-            missing.append(label + " 설명이 부족합니다.")
-
-    evidence_points = [
-        ("03:20 스캔 기록", 7, ["3시 20", "03:20", "스캔", "복사기"]),
-        ("상담실 모니터 계좌 대화", 7, ["모니터", "채팅", "대화", "같은 계좌"]),
-        ("인쇄실 쓰레기통 계좌 메모장", 6, ["메모", "쓰레기통", "계좌"]),
-        ("준이의 7시 목격·상담 예약표·커피 자국", 5, ["준이", "7시", "목격", "예약표", "별표", "커피"]),
-    ]
-
-    for label, points, keywords in evidence_points:
-        if any(keyword in text for keyword in keywords):
-            score += points
-            correct.append(label + "을 근거로 제시했습니다.")
-        else:
-            missing.append(label + " 근거가 빠졌습니다.")
-
-    if score >= 90:
-        grade = "정답"
-    elif score >= 70:
-        grade = "거의 정답"
-    elif score >= 45:
-        grade = "부분 정답"
-    else:
-        grade = "오답에 가까움"
-
-    return {
-        "score": min(score, 100),
-        "grade": grade,
-        "correct": correct[:8],
-        "missing": missing[:8],
-        "wrong": wrong,
-        "feedback": "핵심은 이찬형의 금전 거래, 새벽 3시대 범행, 03:20 스캔 기록, 계좌 증거를 연결하는 것입니다.",
-    }
 
 
 # ------------------------------------------------------------
@@ -1164,6 +1103,25 @@ def draw_collision_debug() -> None:
     screen.blit(overlay, (0, 0))
 
 
+def draw_clue_location_hints() -> None:
+    """F2로 켜고 끄는 단서 위치 표시. 근접했을 때 뜨는 노란 테두리와 같은
+    스타일로, 거리와 상관없이 모든 단서 오브젝트에 테두리를 그린다."""
+    if not SHOW_COLLISION_DEBUG or state.mode != "play":
+        return
+
+    pulse = 2 + int((math.sin(pygame.time.get_ticks() * 0.008) + 1) * 1.5)
+    for obj in objects:
+        if obj.kind != "clue":
+            continue
+        pygame.draw.rect(
+            screen,
+            COLORS["light"],
+            obj.rect.inflate(8, 8),
+            pulse,
+            border_radius=8,
+        )
+
+
 # ------------------------------------------------------------
 # HUD
 # ------------------------------------------------------------
@@ -1206,7 +1164,21 @@ def draw_hud() -> None:
     pygame.draw.rect(screen, (23, 16, 13), (0, 0, WIDTH, 40))
     pygame.draw.line(screen, COLORS["line"], (0, 39), (WIDTH, 39), 2)
 
-    draw_text(screen, "봉인된 모의고사", (18, 8), FONT, COLORS["light"])
+    title_text = "프메학원 모의고사 유출사건"
+    draw_text(screen, title_text, (18, 8), FONT, COLORS["light"])
+
+    if dialogue_session is not None:
+        questions_used = QUESTION_LIMIT - dialogue_session.questions_remaining()
+        question_count_text = f"질문권 : {questions_used}/{QUESTION_LIMIT}"
+        title_width = FONT.size(title_text)[0]
+        draw_text(
+            screen,
+            question_count_text,
+            (18 + title_width + 16, 8),
+            FONT,
+            COLORS["muted"],
+        )
+
     draw_text(
         screen,
         "WASD 이동  |  Q 상호작용  |  / 추리 제출  |  F11 전체화면",
@@ -1233,32 +1205,108 @@ def draw_hud() -> None:
     )
 
     # 사건 노트 — 우측 상단 아이콘을 누르면 펼쳐지고, 다시 누르면 접힌다.
+    # 단서를 누르면 그 단서의 설명/획득 장소가 노트 아래쪽에 펼쳐진다.
     draw_note_icon(NOTE_ICON_RECT)
 
+    NOTE_CLUE_RECTS.clear()
+
     if state.note_open:
-        note_rect = pygame.Rect(825, 96, 275, 122)
+        note_x = 800
+        note_width = 300
+        note_top = 96
+        header_height = 34
+        list_x = note_x + 15
+        list_width = note_width - 30
+        item_line_gap = 3
+        item_spacing = 6
+
+        # 1) 실제로 그리기 전에, 몇 줄이 필요한지 먼저 계산해서 패널 높이를 정한다.
+        item_heights = [
+            len(wrapped_lines("• " + CLUES[clue_id]["name"], FONT_SM, list_width))
+            * (FONT_SM.get_height() + item_line_gap)
+            for clue_id in state.discovered
+        ]
+        list_height = sum(item_heights) + max(0, len(item_heights) - 1) * item_spacing
+        if not state.discovered:
+            list_height = FONT_XS.get_height()
+
+        selected = state.selected_note_clue
+        show_detail = selected in CLUES and selected in state.discovered
+        detail_height = 0
+        if show_detail:
+            detail_lines = wrapped_lines(CLUES[selected]["desc"], FONT_XS, list_width)
+            detail_height = (
+                14  # 구분선 위 여백
+                + FONT_SM.get_height() + 4  # 단서 이름
+                + FONT_XS.get_height() + 6  # 획득 장소
+                + len(detail_lines) * (FONT_XS.get_height() + 2)  # 설명
+            )
+
+        note_height = header_height + list_height + detail_height + 26
+        note_rect = pygame.Rect(note_x, note_top, note_width, note_height)
         draw_pixel_panel(note_rect, fill=(34, 24, 20))
 
         draw_text(
             screen,
             f"사건노트  {len(state.discovered)}",
-            (840, 109),
+            (list_x, note_top + 13),
             FONT_SM,
             COLORS["light"],
         )
 
-        y = 134
-        for clue_id in state.discovered[-4:]:
+        y = note_top + header_height
+
+        if not state.discovered:
             draw_text(
                 screen,
-                "• " + CLUES[clue_id]["name"],
-                (840, y),
-                FONT_SM,
-                COLORS["text"],
-                max_width=245,
+                "아직 발견한 단서가 없다.",
+                (list_x, y),
+                FONT_XS,
+                COLORS["muted"],
+            )
+        else:
+            for clue_id, item_height in zip(state.discovered, item_heights):
+                highlighted = clue_id == selected
+                item_rect = pygame.Rect(list_x, y, list_width, item_height)
+                if highlighted:
+                    pygame.draw.rect(screen, (52, 36, 27), item_rect.inflate(10, 4), border_radius=4)
+
+                draw_text(
+                    screen,
+                    "• " + CLUES[clue_id]["name"],
+                    (list_x, y),
+                    FONT_SM,
+                    COLORS["light"] if highlighted else COLORS["text"],
+                    max_width=list_width,
+                    line_gap=item_line_gap,
+                )
+                NOTE_CLUE_RECTS.append((clue_id, item_rect))
+                y += item_height + item_spacing
+
+        if show_detail:
+            clue = CLUES[selected]
+            y += 4
+            pygame.draw.line(screen, COLORS["line"], (list_x, y), (list_x + list_width, y), 1)
+            y += 10
+
+            y = draw_text(screen, clue["name"], (list_x, y), FONT_SM, COLORS["light"])
+            y = draw_text(
+                screen,
+                f"획득 장소: {clue['location']}",
+                (list_x, y),
+                FONT_XS,
+                COLORS["muted"],
                 line_gap=2,
             )
-            y += 20
+            draw_text(
+                screen,
+                clue["desc"],
+                (list_x, y),
+                FONT_XS,
+                COLORS["text"],
+                max_width=list_width,
+                line_gap=2,
+            )
 
     if state.mode != "play":
         return
@@ -1346,501 +1394,10 @@ def draw_start_screen() -> None:
         screen.fill(COLORS["bg"])
 
     overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-    overlay.fill((16, 10, 8, 172))
-    screen.blit(overlay, (0, 0))
-
-    title = "봉인된 모의고사"
-    subtitle = "사라진 시험지의 진실을 찾는 2D 추리 게임"
-
-    draw_text(
-        screen,
-        title,
-        ((WIDTH - FONT_XL.size(title)[0]) // 2, 90),
-        FONT_XL,
-        COLORS["light"],
-    )
-    draw_text(
-        screen,
-        subtitle,
-        ((WIDTH - FONT.size(subtitle)[0]) // 2, 146),
-        FONT,
-        COLORS["text"],
-    )
-
-    panel_rect = pygame.Rect(190, 205, 740, 300)
-    draw_pixel_panel(panel_rect, fill=(36, 24, 20))
-
-    y = panel_rect.y + 28
-    draw_text(screen, "어떤 게임인가요?", (230, y), FONT_LG, COLORS["light"])
-    y += 44
-    y = draw_text(
-        screen,
-        "학원에서 봉인되어 있던 모의고사 시험지가 사라졌습니다. "
-        "방을 돌아다니며 단서를 조사하고, NPC에게 질문해서 범인과 동기, 방법을 추리하세요.",
-        (230, y),
-        FONT,
-        COLORS["text"],
-        max_width=660,
-    )
-
-    y += 30
-    draw_text(screen, "조작 방법", (230, y), FONT_LG, COLORS["light"])
-    y += 42
-
-    controls = [
-        "W/A/S/D : 이동",
-        "Q : 문 열기, 단서 확인, NPC와 대화",
-        "Enter : 질문 입력 또는 최종 추리 제출",
-        "ESC : 창 닫기 / 게임 종료",
-    ]
-
-    for item in controls:
-        draw_text(screen, item, (250, y), FONT, COLORS["text"])
-        y += 30
-
-    mouse_pos = pygame.mouse.get_pos()
-    hovering = START_BUTTON_RECT.collidepoint(mouse_pos)
-    button_fill = (92, 54, 34) if hovering else (70, 42, 30)
-    pygame.draw.rect(
-        screen,
-        (8, 6, 5),
-        START_BUTTON_RECT.move(5, 5),
-        border_radius=10,
-    )
-    pygame.draw.rect(screen, button_fill, START_BUTTON_RECT, border_radius=10)
-    pygame.draw.rect(screen, COLORS["light"], START_BUTTON_RECT, 2, border_radius=10)
-
-    button_text = "START"
-    draw_text(
-        screen,
-        button_text,
-        (
-            START_BUTTON_RECT.centerx - FONT_LG.size(button_text)[0] // 2,
-            START_BUTTON_RECT.y + 13,
-        ),
-        FONT_LG,
-        COLORS["light"],
-    )
-
-    hint = "Enter 또는 Space로도 시작할 수 있어요"
-    draw_text(
-        screen,
-        hint,
-        ((WIDTH - FONT_SM.size(hint)[0]) // 2, 622),
-        FONT_SM,
-        COLORS["muted"],
-    )
-
-
-def draw_start_screen() -> None:
-    if BACKGROUND:
-        screen.blit(BACKGROUND, (0, 0))
-    else:
-        screen.fill(COLORS["bg"])
-
-    overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-    overlay.fill((16, 10, 8, 172))
-    screen.blit(overlay, (0, 0))
-
-    title = "봉인된 모의고사"
-    subtitle = "사라진 시험지의 진실을 밝히는 2D 추리 게임"
-
-    draw_text(
-        screen,
-        title,
-        ((WIDTH - FONT_XL.size(title)[0]) // 2, 42),
-        FONT_XL,
-        COLORS["light"],
-    )
-    draw_text(
-        screen,
-        subtitle,
-        ((WIDTH - FONT.size(subtitle)[0]) // 2, 96),
-        FONT,
-        COLORS["text"],
-    )
-
-    panel_rect = pygame.Rect(170, 132, 780, 465)
-    draw_pixel_panel(panel_rect, fill=(36, 24, 20))
-
-    y = panel_rect.y + 24
-    intro_lines = [
-        "모의고사 시작 30분 전,",
-        "원장실 금고에 보관되어 있던 시험지 봉투가 개봉된 채 발견되었다.",
-        "",
-        "시험지에 접근할 수 있었던 사람은 학원 안에 있던 네 명.",
-        "그리고 그중 한 명이 시험지를 유출한 범인이다.",
-        "",
-        "플레이어는 학원 곳곳을 돌아다니며 용의자들과 대화하고, 숨겨진 단서와 서로 맞지 않는 진술을 조사해야 한다. 복사기 기록, 등원 기록, 수상한 메모와 대화 내역을 바탕으로 사건의 타임라인을 완성하고 진범을 밝혀내자.",
-        "",
-        "과연 시험지를 유출한 사람은 누구이며,",
-        "그날 새벽 학원에서는 무슨 일이 있었을까?",
-    ]
-
-    for line in intro_lines:
-        if line:
-            y = draw_text(
-                screen,
-                line,
-                (210, y),
-                FONT_SM,
-                COLORS["text"],
-                max_width=700,
-                line_gap=3,
-            )
-        else:
-            y += 12
-
-    y += 12
-    draw_text(screen, "게임 방법", (210, y), FONT_LG, COLORS["light"])
-    y += 38
-
-    guide_lines = [
-        "학원 내부를 탐색하여 사건과 관련된 단서를 수집하세요.",
-        "네 명의 용의자와 대화하며 진술을 확인하세요.",
-        "단서와 진술의 모순을 비교하여 사건의 타임라인을 추리하세요.",
-        "충분한 증거를 모은 뒤 최종 범인을 지목하세요.",
-        "",
-        "단 한 번의 추리가 사건의 결말을 결정합니다.",
-    ]
-
-    for line in guide_lines:
-        if line:
-            y = draw_text(
-                screen,
-                line,
-                (230, y),
-                FONT_SM,
-                COLORS["text"] if "단 한 번" not in line else COLORS["light"],
-                max_width=670,
-                line_gap=3,
-            )
-        else:
-            y += 10
-
-    mouse_pos = pygame.mouse.get_pos()
-    hovering = START_BUTTON_RECT.collidepoint(mouse_pos)
-    button_fill = (92, 54, 34) if hovering else (70, 42, 30)
-    pygame.draw.rect(
-        screen,
-        (8, 6, 5),
-        START_BUTTON_RECT.move(5, 5),
-        border_radius=10,
-    )
-    pygame.draw.rect(screen, button_fill, START_BUTTON_RECT, border_radius=10)
-    pygame.draw.rect(screen, COLORS["light"], START_BUTTON_RECT, 2, border_radius=10)
-
-    button_text = "START"
-    draw_text(
-        screen,
-        button_text,
-        (
-            START_BUTTON_RECT.centerx - FONT_LG.size(button_text)[0] // 2,
-            START_BUTTON_RECT.y + 13,
-        ),
-        FONT_LG,
-        COLORS["light"],
-    )
-
-    hint = "Enter 또는 Space로도 시작할 수 있어요"
-    draw_text(
-        screen,
-        hint,
-        ((WIDTH - FONT_SM.size(hint)[0]) // 2, 622),
-        FONT_SM,
-        COLORS["muted"],
-    )
-
-
-def draw_start_screen() -> None:
-    if BACKGROUND:
-        screen.blit(BACKGROUND, (0, 0))
-    else:
-        screen.fill(COLORS["bg"])
-
-    overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
     overlay.fill((16, 10, 8, 174))
     screen.blit(overlay, (0, 0))
 
-    title = "봉인된 모의고사"
-    subtitle = "사라진 시험지의 진실을 밝히는 2D 추리 게임"
-
-    draw_text(
-        screen,
-        title,
-        ((WIDTH - FONT_XL.size(title)[0]) // 2, 42),
-        FONT_XL,
-        COLORS["light"],
-    )
-    draw_text(
-        screen,
-        subtitle,
-        ((WIDTH - FONT.size(subtitle)[0]) // 2, 94),
-        FONT,
-        COLORS["text"],
-    )
-
-    panel_rect = pygame.Rect(95, 128, 930, 390)
-    draw_pixel_panel(panel_rect, fill=(36, 24, 20))
-
-    left_x = panel_rect.x + 34
-    right_x = panel_rect.x + 600
-    y = panel_rect.y + 24
-
-    story_lines = [
-        "모의고사 시작 30분 전,",
-        "원장실 금고에 보관되어 있던 시험지 봉투가 개봉된 채 발견되었다.",
-        "",
-        "시험지에 접근할 수 있었던 사람은 학원 안에 있던 네 명.",
-        "그리고 그중 한 명이 시험지를 유출한 범인이다.",
-        "",
-        "플레이어는 학원 곳곳을 돌아다니며 용의자들과 대화하고, 숨겨진 단서와 서로 맞지 않는 진술을 조사해야 한다. 복사기 기록, 등원 기록, 수상한 메모와 대화 내역을 바탕으로 사건의 타임라인을 완성하고 진범을 밝혀내자.",
-        "",
-        "과연 시험지를 유출한 사람은 누구이며,",
-        "그날 새벽 학원에서는 무슨 일이 있었을까?",
-    ]
-
-    for line in story_lines:
-        if line:
-            y = draw_text(
-                screen,
-                line,
-                (left_x, y),
-                FONT_SM,
-                COLORS["text"],
-                max_width=520,
-                line_gap=2,
-            )
-        else:
-            y += 10
-
-    y = panel_rect.y + 24
-    draw_text(screen, "게임 방법", (right_x, y), FONT_LG, COLORS["light"])
-    y += 40
-
-    guide_lines = [
-        "학원 내부를 탐색하여 사건과 관련된 단서를 수집하세요.",
-        "네 명의 용의자와 대화하며 진술을 확인하세요.",
-        "단서와 진술의 모순을 비교하여 사건의 타임라인을 추리하세요.",
-        "충분한 증거를 모은 뒤 최종 범인을 지목하세요.",
-        "",
-        "단 한 번의 추리가 사건의 결말을 결정합니다.",
-    ]
-
-    for line in guide_lines:
-        if line:
-            y = draw_text(
-                screen,
-                line,
-                (right_x, y),
-                FONT_SM,
-                COLORS["light"] if "단 한 번" in line else COLORS["text"],
-                max_width=280,
-                line_gap=2,
-            )
-        else:
-            y += 12
-
-    controls_title_y = panel_rect.y + 286
-    draw_text(screen, "조작", (right_x, controls_title_y), FONT, COLORS["light"])
-    controls = [
-        "W/A/S/D : 이동",
-        "Q : 조사 / 대화 / 문 열기",
-        "Enter : 입력 / 추리 제출",
-        "ESC : 창 닫기",
-    ]
-
-    y = controls_title_y + 30
-    for line in controls:
-        draw_text(screen, line, (right_x, y), FONT_SM, COLORS["muted"])
-        y += 22
-
-    mouse_pos = pygame.mouse.get_pos()
-    hovering = START_BUTTON_RECT.collidepoint(mouse_pos)
-    button_fill = (92, 54, 34) if hovering else (70, 42, 30)
-    pygame.draw.rect(
-        screen,
-        (8, 6, 5),
-        START_BUTTON_RECT.move(5, 5),
-        border_radius=10,
-    )
-    pygame.draw.rect(screen, button_fill, START_BUTTON_RECT, border_radius=10)
-    pygame.draw.rect(screen, COLORS["light"], START_BUTTON_RECT, 2, border_radius=10)
-
-    button_text = "START"
-    draw_text(
-        screen,
-        button_text,
-        (
-            START_BUTTON_RECT.centerx - FONT_LG.size(button_text)[0] // 2,
-            START_BUTTON_RECT.y + 13,
-        ),
-        FONT_LG,
-        COLORS["light"],
-    )
-
-    hint = "Enter 또는 Space로도 시작할 수 있어요"
-    draw_text(
-        screen,
-        hint,
-        ((WIDTH - FONT_SM.size(hint)[0]) // 2, 622),
-        FONT_SM,
-        COLORS["muted"],
-    )
-
-
-def draw_start_screen() -> None:
-    if BACKGROUND:
-        screen.blit(BACKGROUND, (0, 0))
-    else:
-        screen.fill(COLORS["bg"])
-
-    overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-    overlay.fill((16, 10, 8, 174))
-    screen.blit(overlay, (0, 0))
-
-    title = "봉인된 모의고사"
-    subtitle = "사라진 시험지의 진실을 밝히는 2D 추리 게임"
-
-    draw_text(
-        screen,
-        title,
-        ((WIDTH - FONT_XL.size(title)[0]) // 2, 36),
-        FONT_XL,
-        COLORS["light"],
-    )
-    draw_text(
-        screen,
-        subtitle,
-        ((WIDTH - FONT.size(subtitle)[0]) // 2, 86),
-        FONT,
-        COLORS["text"],
-    )
-
-    panel_rect = pygame.Rect(105, 116, 910, 410)
-    draw_pixel_panel(panel_rect, fill=(36, 24, 20))
-
-    x = panel_rect.x + 34
-    y = panel_rect.y + 22
-
-    story_lines = [
-        "모의고사 시작 30분 전,",
-        "원장실 금고에 보관되어 있던 시험지 봉투가 개봉된 채 발견되었다.",
-        "",
-        "시험지에 접근할 수 있었던 사람은 학원 안에 있던 네 명.",
-        "그리고 그중 한 명이 시험지를 유출한 범인이다.",
-        "",
-        "플레이어는 학원 곳곳을 돌아다니며 용의자들과 대화하고, 숨겨진 단서와 서로 맞지 않는 진술을 조사해야 한다. 복사기 기록, 등원 기록, 수상한 메모와 대화 내역을 바탕으로 사건의 타임라인을 완성하고 진범을 밝혀내자.",
-        "",
-        "과연 시험지를 유출한 사람은 누구이며,",
-        "그날 새벽 학원에서는 무슨 일이 있었을까?",
-    ]
-
-    for line in story_lines:
-        if line:
-            y = draw_text(
-                screen,
-                line,
-                (x, y),
-                FONT_SM,
-                COLORS["text"],
-                max_width=840,
-                line_gap=2,
-            )
-        else:
-            y += 9
-
-    y += 10
-    draw_text(screen, "게임 방법", (x, y), FONT, COLORS["light"])
-    y += 28
-
-    guide_lines = [
-        "학원 내부를 탐색하여 사건과 관련된 단서를 수집하세요.",
-        "네 명의 용의자와 대화하며 진술을 확인하세요.",
-        "단서와 진술의 모순을 비교하여 사건의 타임라인을 추리하세요.",
-        "충분한 증거를 모은 뒤 최종 범인을 지목하세요.",
-        "단 한 번의 추리가 사건의 결말을 결정합니다.",
-    ]
-
-    for line in guide_lines:
-        y = draw_text(
-            screen,
-            line,
-            (x + 18, y),
-            FONT_SM,
-            COLORS["light"] if "단 한 번" in line else COLORS["text"],
-            max_width=805,
-            line_gap=2,
-        )
-
-    y += 8
-    draw_text(screen, "조작 방법", (x, y), FONT, COLORS["light"])
-    y += 28
-
-    controls = [
-        "W/A/S/D : 이동",
-        "Q : 조사 / 대화 / 문 열기",
-        "Enter : 입력 / 최종 추리 제출",
-        "ESC : 창 닫기 / 게임 종료",
-    ]
-
-    control_x = x + 18
-    for index, line in enumerate(controls):
-        col = index % 2
-        row = index // 2
-        draw_text(
-            screen,
-            line,
-            (control_x + col * 360, y + row * 23),
-            FONT_SM,
-            COLORS["muted"],
-        )
-
-    mouse_pos = pygame.mouse.get_pos()
-    hovering = START_BUTTON_RECT.collidepoint(mouse_pos)
-    button_fill = (92, 54, 34) if hovering else (70, 42, 30)
-    pygame.draw.rect(
-        screen,
-        (8, 6, 5),
-        START_BUTTON_RECT.move(5, 5),
-        border_radius=10,
-    )
-    pygame.draw.rect(screen, button_fill, START_BUTTON_RECT, border_radius=10)
-    pygame.draw.rect(screen, COLORS["light"], START_BUTTON_RECT, 2, border_radius=10)
-
-    button_text = "START"
-    draw_text(
-        screen,
-        button_text,
-        (
-            START_BUTTON_RECT.centerx - FONT_LG.size(button_text)[0] // 2,
-            START_BUTTON_RECT.y + 13,
-        ),
-        FONT_LG,
-        COLORS["light"],
-    )
-
-    hint = "Enter 또는 Space로도 시작할 수 있어요"
-    draw_text(
-        screen,
-        hint,
-        ((WIDTH - FONT_SM.size(hint)[0]) // 2, 622),
-        FONT_SM,
-        COLORS["muted"],
-    )
-
-
-def draw_start_screen() -> None:
-    if BACKGROUND:
-        screen.blit(BACKGROUND, (0, 0))
-    else:
-        screen.fill(COLORS["bg"])
-
-    overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-    overlay.fill((16, 10, 8, 174))
-    screen.blit(overlay, (0, 0))
-
-    title = "봉인된 모의고사"
+    title = "프메학원 모의고사 유출사건"
     subtitle = "사라진 시험지의 진실을 밝히는 2D 추리 게임"
 
     draw_text(
@@ -1921,6 +1478,7 @@ def draw_start_screen() -> None:
     controls = [
         "W/A/S/D : 이동",
         "Q : 조사 / 대화 / 문 열기",
+        "F11 : 전체화면 전환",
         "Enter : 입력",
         "/ : 최종 추리 제출",
         "ESC : 창 닫기 / 게임 종료",
@@ -1928,12 +1486,12 @@ def draw_start_screen() -> None:
 
     control_x = x + 18
     for index, line in enumerate(controls):
-        col = index % 2
-        row = index // 2
+        col = index % 3
+        row = index // 3
         draw_text(
             screen,
             line,
-            (control_x + col * 360, y + row * 20),
+            (control_x + col * 280, y + row * 20),
             FONT_XS,
             COLORS["muted"],
         )
@@ -1972,6 +1530,33 @@ def draw_start_screen() -> None:
     )
 
 
+def clue_lock_state(clue_id: str) -> str:
+    """단서의 잠금 상태를 돌려준다.
+
+    "open": 잠겨 있지 않거나 이미 잠금 해제됨.
+    "hidden": 잠겨 있고, 선행 단서(unlock_requires)도 아직 못 찾음.
+    "password": 잠겨 있지만 선행 단서를 찾아서 비밀번호를 입력할 수 있음.
+    """
+    clue = CLUES[clue_id]
+    if not clue.get("locked") or clue_id in state.unlocked_clues:
+        return "open"
+    prereq = clue.get("unlock_requires")
+    if prereq and prereq not in state.discovered:
+        return "hidden"
+    return "password"
+
+
+def active_locked_clue_id() -> Optional[str]:
+    """지금 열람 중인 오브젝트에 비밀번호 입력이 가능한 잠긴 단서가 있으면 그 id를 돌려준다."""
+    obj = next((item for item in objects if item.id == state.active_clue), None)
+    if obj is None:
+        return None
+    for clue_id in obj.clue_ids:
+        if clue_lock_state(clue_id) == "password":
+            return clue_id
+    return None
+
+
 def draw_clue_window() -> None:
     rect = pygame.Rect(120, 100, 880, 500)
     draw_panel(rect, "단서 확인")
@@ -1996,7 +1581,7 @@ def draw_clue_window() -> None:
 
     for clue_id in obj.clue_ids:
         clue = CLUES[clue_id]
-        state.add_clue(clue_id)
+        lock_state = clue_lock_state(clue_id)
 
         clue_rect = pygame.Rect(150, y, 820, 92)
         pygame.draw.rect(
@@ -2013,21 +1598,57 @@ def draw_clue_window() -> None:
             border_radius=10,
         )
 
-        draw_text(
-            screen,
-            "• " + clue["name"],
-            (170, y + 12),
-            FONT,
-            COLORS["light"],
-        )
-        draw_text(
-            screen,
-            clue["desc"],
-            (170, y + 43),
-            FONT_SM,
-            COLORS["text"],
-            max_width=770,
-        )
+        if lock_state == "open":
+            state.add_clue(clue_id)
+            draw_text(
+                screen,
+                "• " + clue["name"],
+                (170, y + 12),
+                FONT,
+                COLORS["light"],
+            )
+            draw_text(
+                screen,
+                clue["desc"],
+                (170, y + 43),
+                FONT_SM,
+                COLORS["text"],
+                max_width=770,
+            )
+        elif lock_state == "hidden":
+            draw_text(
+                screen,
+                "• ??? (잠김)",
+                (170, y + 12),
+                FONT,
+                COLORS["muted"],
+            )
+            draw_text(
+                screen,
+                "무언가 잠겨 있다. 다른 단서를 더 찾아보면 실마리가 나올 것 같다.",
+                (170, y + 43),
+                FONT_SM,
+                COLORS["muted"],
+                max_width=770,
+            )
+        else:  # "password"
+            draw_text(
+                screen,
+                "• ??? (비밀번호 필요)",
+                (170, y + 12),
+                FONT,
+                COLORS["light"],
+            )
+            input_rect = pygame.Rect(170, y + 40, 300, 36)
+            pygame.draw.rect(screen, (25, 18, 16), input_rect, border_radius=8)
+            pygame.draw.rect(screen, COLORS["line"], input_rect, 2, border_radius=8)
+            draw_text(
+                screen,
+                visible_input_text("비밀번호 입력 후 Enter"),
+                (182, y + 48),
+                FONT_SM,
+                COLORS["text"] if state.input_text or state.composing_text else COLORS["muted"],
+            )
 
         y += 108
 
@@ -2058,7 +1679,12 @@ def draw_dialogue_window() -> None:
         COLORS["light"],
     )
 
-    reply = state.last_reply or npc["intro"]
+    if state.npc_thinking:
+        dots = "." * ((pygame.time.get_ticks() // 450) % 4)
+        reply = "생각 중" + dots
+    else:
+        reply = state.last_reply or npc["intro"]
+
     draw_text(
         screen,
         reply,
@@ -2166,164 +1792,6 @@ def draw_judge_window() -> None:
     )
 
 
-def draw_result_window() -> None:
-    rect = pygame.Rect(90, 50, 940, 620)
-    draw_panel(rect, "추리 판정 결과")
-
-    result = state.judge_result
-    if result is None:
-        return
-
-    draw_text(
-        screen,
-        f"점수: {result['score']}점  |  판정: {result['grade']}",
-        (125, 115),
-        FONT_LG,
-        COLORS["light"],
-    )
-
-    y = 165
-
-    draw_text(screen, "맞힌 부분", (125, y), FONT, COLORS["green"])
-    y += 34
-
-    for item in result["correct"]:
-        y = draw_text(
-            screen,
-            "• " + item,
-            (145, y),
-            FONT_SM,
-            COLORS["text"],
-            max_width=820,
-            line_gap=3,
-        )
-
-    y += 12
-    draw_text(screen, "부족한 부분", (125, y), FONT, COLORS["danger"])
-    y += 34
-
-    for item in result["missing"]:
-        y = draw_text(
-            screen,
-            "• " + item,
-            (145, y),
-            FONT_SM,
-            COLORS["text"],
-            max_width=820,
-            line_gap=3,
-        )
-
-    y += 12
-    draw_text(screen, "피드백", (125, y), FONT, COLORS["light"])
-    y += 34
-
-    draw_text(
-        screen,
-        result["feedback"],
-        (145, y),
-        FONT,
-        COLORS["text"],
-        max_width=820,
-    )
-
-    draw_text(
-        screen,
-        "ESC  돌아가기",
-        (835, 625),
-        FONT,
-        COLORS["muted"],
-    )
-
-
-# ------------------------------------------------------------
-# 업데이트 / 입력
-# ------------------------------------------------------------
-def draw_result_window() -> None:
-    rect = pygame.Rect(90, 50, 940, 620)
-    draw_panel(rect, "추리 결과")
-
-    result = state.judge_result
-    if result is None:
-        return
-
-    draw_text(
-        screen,
-        f"점수: {result['score']}점 | 판정: {result['grade']}",
-        (125, 115),
-        FONT_LG,
-        COLORS["light"],
-    )
-
-    y = 165
-    draw_text(screen, "맞은 부분", (125, y), FONT, COLORS["green"])
-    y += 34
-
-    for item in result["correct"]:
-        y = draw_text(
-            screen,
-            "- " + item,
-            (145, y),
-            FONT_SM,
-            COLORS["text"],
-            max_width=820,
-            line_gap=3,
-        )
-
-    y += 12
-    draw_text(screen, "부족한 부분", (125, y), FONT, COLORS["danger"])
-    y += 34
-
-    for item in result["missing"]:
-        y = draw_text(
-            screen,
-            "- " + item,
-            (145, y),
-            FONT_SM,
-            COLORS["text"],
-            max_width=820,
-            line_gap=3,
-        )
-
-    y += 12
-    draw_text(screen, "피드백", (125, y), FONT, COLORS["light"])
-    y += 34
-
-    draw_text(
-        screen,
-        result["feedback"],
-        (145, y),
-        FONT,
-        COLORS["text"],
-        max_width=820,
-    )
-
-    mouse_pos = pygame.mouse.get_pos()
-    hovering = RETRY_BUTTON_RECT.collidepoint(mouse_pos)
-    button_fill = (92, 54, 34) if hovering else (70, 42, 30)
-    pygame.draw.rect(
-        screen,
-        (8, 6, 5),
-        RETRY_BUTTON_RECT.move(5, 5),
-        border_radius=10,
-    )
-    pygame.draw.rect(screen, button_fill, RETRY_BUTTON_RECT, border_radius=10)
-    pygame.draw.rect(screen, COLORS["light"], RETRY_BUTTON_RECT, 2, border_radius=10)
-
-    button_text = "RETRY"
-    draw_text(
-        screen,
-        button_text,
-        (
-            RETRY_BUTTON_RECT.centerx - FONT_LG.size(button_text)[0] // 2,
-            RETRY_BUTTON_RECT.y + 9,
-        ),
-        FONT_LG,
-        COLORS["light"],
-    )
-
-    draw_text(screen, "ESC: 돌아가기", (805, 625), FONT_SM, COLORS["muted"])
-
-
 def compact_feedback_text(text: str) -> str:
     lines = []
     previous_blank = False
@@ -2339,49 +1807,6 @@ def compact_feedback_text(text: str) -> str:
         previous_blank = False
 
     return "\n".join(lines).strip()
-
-
-def draw_text_limited(
-    surface: pygame.Surface,
-    text: str,
-    pos,
-    font,
-    color,
-    max_width: int,
-    max_height: int,
-    line_gap: int = 2,
-) -> int:
-    x, y = pos
-    bottom = y + max_height
-    lines: List[str] = []
-
-    for paragraph in compact_feedback_text(text).splitlines() or [""]:
-        current = ""
-
-        for ch in paragraph:
-            test = current + ch
-            if font.size(test)[0] <= max_width or not current:
-                current = test
-            else:
-                lines.append(current)
-                current = ch
-
-        if current:
-            lines.append(current)
-        elif not paragraph:
-            lines.append("")
-
-    for index, line in enumerate(lines):
-        next_y = y + font.get_height()
-        if next_y > bottom:
-            surface.blit(font.render("...", True, COLORS["muted"]), (x, y))
-            return y + font.get_height()
-
-        if line:
-            surface.blit(font.render(line, True, color), (x, y))
-        y += font.get_height() + line_gap
-
-    return y
 
 
 def wrapped_lines(text: str, font, max_width: int) -> List[str]:
@@ -2582,7 +2007,7 @@ def move_player(keys) -> None:
         player.y = old.y
 
 
-TEXT_INPUT_MODES = ("dialogue", "judge")
+TEXT_INPUT_MODES = ("dialogue", "judge", "clue")
 
 
 def set_mode(mode: str) -> None:
@@ -2611,6 +2036,8 @@ def handle_q() -> None:
 
     if near.kind == "clue":
         state.active_clue = near.id
+        state.input_text = ""
+        state.composing_text = ""
         set_mode("clue")
 
     elif near.kind == "npc":
@@ -2627,23 +2054,29 @@ def handle_q() -> None:
 
 
 def submit_dialogue() -> None:
-    if not state.input_text.strip() or state.active_npc is None:
+    if not state.input_text.strip() or state.active_npc is None or state.npc_thinking:
         return
 
     npc_id = state.active_npc
     question = state.input_text.strip()
-    if dialogue_session is not None and handle_player_message is not None:
-        dialogue_session.sync_discovered_clues(state.discovered)
-        reply = handle_player_message(npc_id, question, dialogue_session)
-    else:
-        reply = npc_reply(npc_id, question, state.discovered)
-        if GAME_ENGINE_IMPORT_ERROR is not None:
-            reply += f"\n\n[대화 엔진 오류: {type(GAME_ENGINE_IMPORT_ERROR).__name__}]"
-
-    state.last_reply = reply
-    state.conversation.setdefault(npc_id, []).append(f"P: {question}")
-    state.conversation.setdefault(npc_id, []).append(f"N: {reply}")
     state.input_text = ""
+    state.npc_thinking = True
+
+    def worker() -> None:
+        if dialogue_session is not None and handle_player_message is not None:
+            dialogue_session.sync_discovered_clues(state.discovered)
+            reply = handle_player_message(npc_id, question, dialogue_session)
+        else:
+            reply = npc_reply(npc_id, question, state.discovered)
+            if GAME_ENGINE_IMPORT_ERROR is not None:
+                reply += f"\n\n[대화 엔진 오류: {type(GAME_ENGINE_IMPORT_ERROR).__name__}]"
+
+        state.last_reply = reply
+        state.conversation.setdefault(npc_id, []).append(f"P: {question}")
+        state.conversation.setdefault(npc_id, []).append(f"N: {reply}")
+        state.npc_thinking = False
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def submit_judge() -> None:
@@ -2668,6 +2101,25 @@ def submit_judge() -> None:
     threading.Thread(target=worker, daemon=True).start()
 
 
+def submit_clue_password() -> None:
+    clue_id = active_locked_clue_id()
+    if clue_id is None:
+        return
+
+    entered = state.input_text.strip()
+    state.input_text = ""
+    if not entered:
+        return
+
+    clue = CLUES[clue_id]
+    if entered == clue.get("unlock_password"):
+        state.unlocked_clues.append(clue_id)
+        state.add_clue(clue_id)
+        state.notify(f"'{clue['name']}' 잠금 해제!")
+    else:
+        state.notify("비밀번호가 틀렸다.")
+
+
 # ------------------------------------------------------------
 # 메인 루프
 # ------------------------------------------------------------
@@ -2682,17 +2134,21 @@ def retry_game() -> None:
 
     set_mode("start")
     state.discovered.clear()
+    state.unlocked_clues.clear()
     state.conversation.clear()
     state.active_npc = None
     state.active_clue = None
     state.input_text = ""
     state.composing_text = ""
     state.last_reply = ""
+    state.npc_thinking = False
     state.judge_result = None
     state.judging = False
     state.result_scroll = 0
     state.notification = ""
     state.notification_until = 0
+    state.note_open = False
+    state.selected_note_clue = None
     if dialogue_session is not None:
         dialogue_session.reset()
     for door in doors:
@@ -2705,6 +2161,8 @@ def active_input_limit() -> int:
         return 90
     if state.mode == "judge":
         return 240
+    if state.mode == "clue" and active_locked_clue_id() is not None:
+        return 20
     return 0
 
 
@@ -2748,17 +2206,28 @@ def main() -> None:
                     retry_game()
                 elif state.mode != "start" and NOTE_ICON_RECT.collidepoint(event.pos):
                     state.note_open = not state.note_open
+                    if not state.note_open:
+                        state.selected_note_clue = None
+                elif state.note_open and any(
+                    rect.collidepoint(event.pos) for _, rect in NOTE_CLUE_RECTS
+                ):
+                    for clue_id, rect in NOTE_CLUE_RECTS:
+                        if rect.collidepoint(event.pos):
+                            state.selected_note_clue = (
+                                None if state.selected_note_clue == clue_id else clue_id
+                            )
+                            break
 
             elif event.type == pygame.MOUSEWHEEL:
                 if state.mode == "result":
                     scroll_result(-event.y * 3)
 
             elif event.type == pygame.TEXTEDITING:
-                if state.mode in ("dialogue", "judge"):
+                if state.mode in ("dialogue", "judge", "clue"):
                     state.composing_text = event.text
 
             elif event.type == pygame.TEXTINPUT:
-                if state.mode in ("dialogue", "judge"):
+                if state.mode in ("dialogue", "judge", "clue"):
                     append_input_text(event.text)
                     state.composing_text = ""
 
@@ -2766,7 +2235,9 @@ def main() -> None:
                 if event.key == pygame.K_F2:
                     SHOW_COLLISION_DEBUG = not SHOW_COLLISION_DEBUG
                     state.notify(
-                        "충돌 영역 표시 ON" if SHOW_COLLISION_DEBUG else "충돌 영역 표시 OFF"
+                        "디버그 표시(충돌 영역·단서 위치) ON"
+                        if SHOW_COLLISION_DEBUG
+                        else "디버그 표시(충돌 영역·단서 위치) OFF"
                     )
 
                 elif event.key == pygame.K_F11 or (
@@ -2778,6 +2249,10 @@ def main() -> None:
                 elif event.key == pygame.K_ESCAPE:
                     if state.mode == "judging":
                         state.notify("추론 중입니다. 잠시만 기다려 주세요.")
+                        continue
+
+                    if state.mode == "dialogue" and state.npc_thinking:
+                        state.notify("생각 중입니다. 잠시만 기다려 주세요.")
                         continue
 
                     if state.mode in [
@@ -2816,6 +2291,13 @@ def main() -> None:
                     elif event.key == pygame.K_BACKSPACE:
                         state.input_text = state.input_text[:-1]
 
+                elif state.mode == "clue":
+                    if event.key == pygame.K_RETURN:
+                        state.composing_text = ""
+                        submit_clue_password()
+                    elif event.key == pygame.K_BACKSPACE:
+                        state.input_text = state.input_text[:-1]
+
                 elif state.mode == "result":
                     if event.key == pygame.K_DOWN:
                         scroll_result(1)
@@ -2838,6 +2320,7 @@ def main() -> None:
         draw_background_map()
         draw_doors()
         draw_interactable_highlight()
+        draw_clue_location_hints()
         draw_npcs()
         draw_player()
         draw_collision_debug()
