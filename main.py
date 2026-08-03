@@ -317,6 +317,7 @@ class GameState:
 state = GameState()
 dialogue_session = GameSession() if GameSession is not None else None
 SHOW_COLLISION_DEBUG = False
+SHOW_CLUE_SPARKLE = True  # 이 반짝임 표시가 마음에 안 들면 False로 바꾸면 바로 사라진다.
 START_BUTTON_RECT = pygame.Rect(440, 610, 240, 54)
 RETRY_BUTTON_RECT = pygame.Rect(455, 596, 210, 50)
 NOTE_ICON_RECT = pygame.Rect(1060, 50, 40, 40)
@@ -1120,6 +1121,32 @@ def draw_clue_location_hints() -> None:
             pulse,
             border_radius=8,
         )
+
+
+def draw_clue_sparkles() -> None:
+    """F2(SHOW_COLLISION_DEBUG)를 켜지 않아도 미발견 단서 위치를 알려주는
+    작은 반짝임 표시. 이미 발견한 단서는 표시하지 않는다.
+    SHOW_CLUE_SPARKLE = False로 바꾸면 이 표시만 바로 없앨 수 있다."""
+    if not SHOW_CLUE_SPARKLE or state.mode != "play":
+        return
+
+    twinkle = (math.sin(pygame.time.get_ticks() * 0.006) + 1) / 2  # 0~1
+    size = 4 + twinkle * 3
+
+    for obj in objects:
+        if obj.kind != "clue":
+            continue
+        if all(clue_id in state.discovered for clue_id in obj.clue_ids):
+            continue
+
+        cx, cy = obj.rect.centerx, obj.rect.top - 10
+        points = [
+            (cx, cy - size),
+            (cx + size, cy),
+            (cx, cy + size),
+            (cx - size, cy),
+        ]
+        pygame.draw.polygon(screen, COLORS["light"], points)
 
 
 # ------------------------------------------------------------
@@ -2321,6 +2348,7 @@ def main() -> None:
         draw_doors()
         draw_interactable_highlight()
         draw_clue_location_hints()
+        draw_clue_sparkles()
         draw_npcs()
         draw_player()
         draw_collision_debug()
