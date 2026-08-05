@@ -49,6 +49,10 @@ WIDTH, HEIGHT = 1120, 720
 FPS = 60
 TILE = 32
 
+# 게임 시작(플레이 진입) 후 이 시간이 지나면 추리 제출 화면이 강제로 뜬다.
+# 추리 제출 자체는 이 시간 전에도 언제든 (/) 할 수 있다.
+DEDUCTION_TIMER_SECONDS = 6 * 60
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSET_DIR = os.path.join(BASE_DIR, "front", "assets")
 BACKGROUND_PATH = os.path.join(ASSET_DIR, "background.png")
@@ -228,7 +232,18 @@ def load_portrait(filename: str, size=(180, 130)) -> pygame.Surface:
         return fallback
 
 
-def load_map_sprite(filename: str, size=(58, 78)) -> pygame.Surface:
+def smoothscale_down(surface: pygame.Surface, size) -> pygame.Surface:
+    """pygame.transform.smoothscale loses alpha when downscaling by a very
+    large factor in one step, so shrink by half repeatedly first."""
+    w, h = surface.get_size()
+    tw, th = size
+    while w > tw * 2 and h > th * 2:
+        w, h = max(tw, w // 2), max(th, h // 2)
+        surface = pygame.transform.smoothscale(surface, (w, h))
+    return pygame.transform.smoothscale(surface, size)
+
+
+def load_map_sprite(filename: str, size=(58, 78), crop: bool = True) -> pygame.Surface:
     path = os.path.join(ASSET_DIR, filename)
 
     if not os.path.exists(path):
@@ -241,6 +256,17 @@ def load_map_sprite(filename: str, size=(58, 78)) -> pygame.Surface:
         image = pygame.image.load(path).convert_alpha()
         width, height = image.get_size()
 
+        if not crop:
+            # Fit the whole image (no cropping/mask/border) into the target
+            # size, preserving aspect ratio, for art that isn't a centered bust.
+            scale = min(size[0] / width, size[1] / height)
+            fit_size = (max(1, round(width * scale)), max(1, round(height * scale)))
+            scaled = smoothscale_down(image, fit_size)
+            sprite = pygame.Surface(size, pygame.SRCALPHA)
+            offset = ((size[0] - fit_size[0]) // 2, (size[1] - fit_size[1]) // 2)
+            sprite.blit(scaled, offset)
+            return sprite
+
         # The current character art is centered in each source image.
         crop_width = min(width, int(width * 0.34))
         crop_height = min(height, int(height * 0.62))
@@ -250,10 +276,10 @@ def load_map_sprite(filename: str, size=(58, 78)) -> pygame.Surface:
         if crop_y + crop_height > height:
             crop_y = height - crop_height
 
-        crop = image.subsurface(
+        crop_surface = image.subsurface(
             pygame.Rect(crop_x, crop_y, crop_width, crop_height)
         ).copy()
-        sprite = pygame.transform.smoothscale(crop, size)
+        sprite = pygame.transform.smoothscale(crop_surface, size)
 
         mask = pygame.Surface(size, pygame.SRCALPHA)
         pygame.draw.rect(
@@ -304,6 +330,8 @@ class GameState:
     notification_until: int = 0
     note_open: bool = False
     selected_note_clue: Optional[str] = None
+    play_started_ticks: Optional[int] = None
+    deduction_forced: bool = False
 
     def add_clue(self, clue_id: str) -> None:
         if clue_id not in self.discovered:
@@ -322,6 +350,9 @@ START_BUTTON_RECT = pygame.Rect(440, 610, 240, 54)
 RETRY_BUTTON_RECT = pygame.Rect(455, 596, 210, 50)
 NOTE_ICON_RECT = pygame.Rect(1060, 50, 40, 40)
 NOTE_CLUE_RECTS: list[tuple[str, pygame.Rect]] = []
+
+# 상단 바에서 질문권 표시와 키 설명 사이, 중앙에 놓이는 추리 제출 타이머/버튼.
+DEDUCTION_BOX_RECT = pygame.Rect(WIDTH // 2 - 105, 7, 210, 26)
 
 
 # ------------------------------------------------------------
@@ -346,16 +377,10 @@ CLUES = {
         "desc": "메모장에 상담실장의 계좌번호가 적혀있다.",
         "tags": ["이찬형 핵심"],
     },
-    "safe_keypad": {
-        "name": "금고 키패드 지문",
-        "location": "원장실",
-        "desc": "금고 키패드에 지문이 거의 남아 있지 않고, 닦아낸 흔적이 있다.",
-        "tags": ["은폐"],
-    },
     "performance_sheet": {
         "name": "성과급 평가표",
         "location": "원장실",
-        "desc": "강사들에 대한 평가와 성과급 기준이 적혀있다. 전국 모의고사 평균, 정예반 유지율, 우수 성적자 비율이 적혀있으며, 기초반 강사에게 불리하다.",
+        "desc": "강사들에 대한 평가와 성과급 기준이 적혀있다.  정예반 강사는 우수 성적자 수가 높아 성과급을 많이 받고, 그에 비해 기초반 강사는 우수 성적자 수가 적어 성과급을 적게 받는다.",
         "tags": ["홍지연 동기처럼 보임"],
     },
     "consult_schedule": {
@@ -459,7 +484,7 @@ MAP_SPRITES = {
     npc_id: load_map_sprite(npc["file"])
     for npc_id, npc in NPCS.items()
 }
-PLAYER_SPRITE = load_map_sprite("chanhyung.png", (52, 72))
+PLAYER_SPRITE = load_map_sprite("player.png", (52, 72), crop=False)
 
 
 # ------------------------------------------------------------
@@ -557,7 +582,7 @@ doors: List[Door] = [
     Door(
         id="door_counsel",
         name="상담실 문",
-        rect=pygame.Rect(337, 493, 15, 66),
+        rect=pygame.Rect(320, 493, 15, 66),
         orientation="vertical",
         room_a="hall",
         room_b="counsel_room",
@@ -566,7 +591,7 @@ doors: List[Door] = [
     Door(
         id="door_classroom",
         name="교실 문",
-        rect=pygame.Rect(799, 493, 15, 66),
+        rect=pygame.Rect(810, 493, 15, 66),
         orientation="vertical",
         room_a="hall",
         room_b="classroom",
@@ -595,7 +620,7 @@ objects: List[Interactable] = [
         "clue",
         "원장실 금고",
         pygame.Rect(980, 85, 75, 85),
-        ["safe_keypad", "safe_open_log"],
+        ["safe_open_log"],
     ),
     Interactable(
         "desk_docs",
@@ -652,6 +677,8 @@ for npc_id, npc in NPCS.items():
 # ------------------------------------------------------------
 player = pygame.Rect(500, 570, 28, 36)
 player_speed = 3.2
+player_facing = "left"  # player.png art faces left by default
+PLAYER_SPRITE_RIGHT = pygame.transform.flip(PLAYER_SPRITE, True, False)
 
 
 # 문 위치는 비워두고, 나머지 벽만 충돌 처리한다.
@@ -662,7 +689,7 @@ walls = [
     pygame.Rect(0, 0, WIDTH, 80),
     pygame.Rect(0, 0, 40, HEIGHT),
     pygame.Rect(WIDTH - 80, 0, 80, HEIGHT),
-    pygame.Rect(0, HEIGHT - 16, WIDTH, 16),
+    pygame.Rect(0, HEIGHT - 100, WIDTH, 100),
 
     # --------------------------------------------------------
     # 상단 세 방의 아래 벽
@@ -681,21 +708,21 @@ walls = [
     # 상담실 외벽
     # 오른쪽 벽의 y=493~559 구간만 문으로 비운다.
     # --------------------------------------------------------
-    pygame.Rect(34, 370, 318, 16),
+    pygame.Rect(34, 370, 300, 16),
     pygame.Rect(34, 370, 16, 258),
-    pygame.Rect(34, 622, 318, 16),
-    pygame.Rect(337, 370, 15, 123),
-    pygame.Rect(337, 559, 15, 79),
+    pygame.Rect(34, 622, 300, 16),
+    pygame.Rect(320, 370, 15, 123),
+    pygame.Rect(320, 559, 15, 79),
 
     # --------------------------------------------------------
     # 교실 외벽
     # 왼쪽 벽의 y=493~559 구간만 문으로 비운다.
     # --------------------------------------------------------
-    pygame.Rect(799, 370, 286, 16),
-    pygame.Rect(799, 370, 15, 123),
-    pygame.Rect(799, 559, 15, 79),
+    pygame.Rect(810, 370, 286, 16),
+    pygame.Rect(810, 370, 15, 123),
+    pygame.Rect(810, 559, 15, 79),
     pygame.Rect(1070, 370, 15, 268),
-    pygame.Rect(799, 622, 286, 16),
+    pygame.Rect(810, 622, 286, 16),
 
     # --------------------------------------------------------
     # 중앙 안내 데스크
@@ -827,8 +854,6 @@ def npc_reply(npc_id: str, message: str, discovered: List[str]) -> str:
             return "금고 비밀번호는 원장님과 저만 알고 있습니다. 다만 누군가 제 컴퓨터나 원장실 자료를 봤다면 가능성이 아예 없진 않겠네요."
         if "발견" in msg or "아침" in msg:
             return "오늘 8시 30분쯤 모의고사 준비를 하려고 금고를 열었는데, 시험지 봉투가 이미 뜯겨 있었습니다."
-        if "지문" in msg or "닦" in msg:
-            return "키패드가 닦여 있었다면 누군가 흔적을 의도적으로 지운 거예요. 단순 실수는 아닌 것 같습니다."
         return "시험지는 분명 어제 원장실 금고에 넣었습니다. 보관 담당자로서 저도 당황스럽습니다."
 
     if npc_id == "juni":
@@ -1072,14 +1097,15 @@ def draw_player() -> None:
         pygame.K_s,
     ))
     bob = int(math.sin(pygame.time.get_ticks() * 0.018) * 2) if moving else 0
-    sprite_rect = PLAYER_SPRITE.get_rect(midbottom=(x, y + 29 + bob))
+    sprite = PLAYER_SPRITE_RIGHT if player_facing == "right" else PLAYER_SPRITE
+    sprite_rect = sprite.get_rect(midbottom=(x, y + 29 + bob))
 
     pygame.draw.ellipse(
         screen,
         COLORS["shadow"],
         (x - 20, y + 12, 40, 12),
     )
-    screen.blit(PLAYER_SPRITE, sprite_rect)
+    screen.blit(sprite, sprite_rect)
 
 
 def draw_collision_debug() -> None:
@@ -1172,6 +1198,54 @@ def draw_pixel_panel(
     pygame.draw.rect(screen, border, rect, 2, border_radius=8)
 
 
+def start_deduction_timer() -> None:
+    """플레이가 시작되는 순간 한 번만 호출해 추리 제출 타이머를 새로 켠다."""
+    state.play_started_ticks = pygame.time.get_ticks()
+    state.deduction_forced = False
+
+
+def deduction_remaining_ms() -> int:
+    if state.play_started_ticks is None:
+        return DEDUCTION_TIMER_SECONDS * 1000
+
+    elapsed = pygame.time.get_ticks() - state.play_started_ticks
+    return max(0, DEDUCTION_TIMER_SECONDS * 1000 - elapsed)
+
+
+def update_deduction_timer() -> None:
+    """제한 시간이 다 되면 추리 제출 화면을 강제로 띄운다.
+    강제로 뜬 뒤에는 ESC로 취소할 수 없다 (submit_judge()로 실제 제출해야 벗어난다)."""
+    if state.deduction_forced or state.play_started_ticks is None:
+        return
+    if deduction_remaining_ms() > 0:
+        return
+    if state.mode in ("judging", "result"):
+        return  # 이미 제출했거나 채점 중이면 강제로 띄우지 않는다.
+
+    state.deduction_forced = True
+    if state.mode != "judge":
+        state.input_text = ""
+        state.composing_text = ""
+        set_mode("judge")
+    state.notify("제한 시간이 종료되어 추리를 제출해야 합니다!", duration_ms=2600)
+
+
+def draw_deduction_timer() -> None:
+    """상단 바 중앙, 질문권 표시와 키 설명 사이에 남은 시간을 표시한다."""
+    box = DEDUCTION_BOX_RECT
+    remaining_s = deduction_remaining_ms() // 1000
+    label = f"남은 시간 {remaining_s // 60:02d}:{remaining_s % 60:02d}"
+    text_color = (255, 150, 120) if remaining_s <= 30 else COLORS["muted"]
+
+    pygame.draw.rect(screen, (30, 22, 18), box, border_radius=6)
+    pygame.draw.rect(screen, COLORS["line"], box, 2, border_radius=6)
+
+    text_w = FONT_SM.size(label)[0]
+    draw_text(
+        screen, label, (box.centerx - text_w // 2, box.y + 5), FONT_SM, text_color,
+    )
+
+
 def draw_note_icon(rect: pygame.Rect) -> None:
     """사건노트 펼치기/접기 아이콘. 눌린 상태(펼침)일 때 살짝 밝게 표시한다."""
     draw_pixel_panel(rect, fill=(48, 33, 24) if state.note_open else (40, 28, 22), shadow=False)
@@ -1205,6 +1279,8 @@ def draw_hud() -> None:
             FONT,
             COLORS["muted"],
         )
+
+    draw_deduction_timer()
 
     draw_text(
         screen,
@@ -2005,6 +2081,8 @@ def draw_judging_window() -> None:
 
 
 def move_player(keys) -> None:
+    global player_facing
+
     dx = 0.0
     dy = 0.0
 
@@ -2016,6 +2094,11 @@ def move_player(keys) -> None:
         dy -= player_speed
     if keys[pygame.K_s]:
         dy += player_speed
+
+    if dx < 0:
+        player_facing = "left"
+    elif dx > 0:
+        player_facing = "right"
 
     if dx and dy:
         dx *= 0.707
@@ -2075,9 +2158,7 @@ def handle_q() -> None:
         set_mode("dialogue")
 
     elif near.kind == "judge":
-        state.input_text = ""
-        state.composing_text = ""
-        set_mode("judge")
+        open_judge_template()
 
 
 def submit_dialogue() -> None:
@@ -2176,6 +2257,8 @@ def retry_game() -> None:
     state.notification_until = 0
     state.note_open = False
     state.selected_note_clue = None
+    state.play_started_ticks = None
+    state.deduction_forced = False
     if dialogue_session is not None:
         dialogue_session.reset()
     for door in doors:
@@ -2229,8 +2312,11 @@ def main() -> None:
             ):
                 if state.mode == "start" and START_BUTTON_RECT.collidepoint(event.pos):
                     set_mode("play")
+                    start_deduction_timer()
                 elif state.mode == "result" and RETRY_BUTTON_RECT.collidepoint(event.pos):
                     retry_game()
+                elif state.mode == "play" and DEDUCTION_BOX_RECT.collidepoint(event.pos):
+                    open_judge_template()
                 elif state.mode != "start" and NOTE_ICON_RECT.collidepoint(event.pos):
                     state.note_open = not state.note_open
                     if not state.note_open:
@@ -2282,6 +2368,10 @@ def main() -> None:
                         state.notify("생각 중입니다. 잠시만 기다려 주세요.")
                         continue
 
+                    if state.mode == "judge" and state.deduction_forced:
+                        state.notify("제한 시간이 종료되어 추리 제출을 취소할 수 없습니다.")
+                        continue
+
                     if state.mode in [
                         "clue",
                         "dialogue",
@@ -2297,6 +2387,7 @@ def main() -> None:
                 elif state.mode == "start":
                     if event.key in (pygame.K_RETURN, pygame.K_SPACE):
                         set_mode("play")
+                        start_deduction_timer()
 
                 elif state.mode == "play":
                     if event.key == pygame.K_q:
@@ -2338,6 +2429,8 @@ def main() -> None:
         if state.mode == "play":
             keys = pygame.key.get_pressed()
             move_player(keys)
+
+        update_deduction_timer()
 
         if state.mode == "start":
             draw_start_screen()

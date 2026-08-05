@@ -1,7 +1,21 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -m py_compile main.py)"
+      "Bash(python -m py_compile main.py)",
+      "Bash(python3 -c \"from PIL import Image; im = Image.open\\(r'front/assets/player.png'\\); print\\(im.size, im.mode\\)\")",
+      "PowerShell(python -c \"from PIL import Image; im = Image.open\\(r'front/assets/player.png'\\); print\\(im.size, im.mode\\)\")",
+      "PowerShell(python -m py_compile main.py; echo \"EXIT:$LASTEXITCODE\")",
+      "PowerShell(Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile\\(\"$PWD\\\\front\\\\assets\\\\player.png\"\\); \"$\\($img.Width\\) x $\\($img.Height\\)\"; $img.Dispose\\(\\))",
+      "Bash(\"venv/Scripts/python.exe\" \"C:\\\\Users\\\\hibab\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-hibab-Desktop-Prometheus-Demoday-Project-Prometheus-Project-Demoday\\\\734e2d5b-3ac7-46c1-9cc6-5ffc96f54999\\\\scratchpad\\\\test_scale.py\")",
+      "Bash(\"venv/Scripts/python.exe\" -m pip list)",
+      "Bash(where.exe python *)",
+      "Bash(python -c \"import pygame\")",
+      "Bash(python \"C:\\\\Users\\\\hibab\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-hibab-Desktop-Prometheus-Demoday-Project-Prometheus-Project-Demoday\\\\734e2d5b-3ac7-46c1-9cc6-5ffc96f54999\\\\scratchpad\\\\test_scale.py\")",
+      "Bash(python \"C:\\\\Users\\\\hibab\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-hibab-Desktop-Prometheus-Demoday-Project-Prometheus-Project-Demoday\\\\734e2d5b-3ac7-46c1-9cc6-5ffc96f54999\\\\scratchpad\\\\test_scale2.py\")",
+      "Bash(python -c ' *)",
+      "Bash(powershell -NoProfile -Command ' *)",
+      "Bash(python -m py_compile main.py game_engine.py)",
+      "Bash(timeout 20 python -c \"import main\")"
     ]
   }
 }
