@@ -1787,15 +1787,25 @@ def draw_dialogue_window() -> None:
         return
 
     npc = NPCS[state.active_npc]
-    rect = pygame.Rect(80, 420, 960, 260)
+    placeholder = "질문을 입력하고 Enter..."
+    input_text = visible_input_text(placeholder)
+    input_lines = wrapped_lines(input_text, FONT_SM, 652)
+    input_line_height = FONT_SM.get_height() + 4
+    input_height = max(42, len(input_lines) * input_line_height + 20)
+    dialogue_growth = input_height - 42
+
+    rect = pygame.Rect(80, 420 - dialogue_growth, 960, 260 + dialogue_growth)
     draw_panel(rect)
 
-    screen.blit(PORTRAITS[state.active_npc], (105, 448))
+    screen.blit(
+        PORTRAITS[state.active_npc],
+        (105, 448 - dialogue_growth),
+    )
 
     draw_text(
         screen,
         f"{npc['name']}  |  {npc['role']}",
-        (310, 445),
+        (310, 445 - dialogue_growth),
         FONT_LG,
         COLORS["light"],
     )
@@ -1809,13 +1819,13 @@ def draw_dialogue_window() -> None:
     draw_text(
         screen,
         reply,
-        (310, 488),
+        (310, 488 - dialogue_growth),
         FONT,
         COLORS["text"],
         max_width=690,
     )
 
-    input_rect = pygame.Rect(310, 610, 680, 42)
+    input_rect = pygame.Rect(310, 652 - input_height, 680, input_height)
     pygame.draw.rect(
         screen,
         (25, 18, 16),
@@ -1830,19 +1840,20 @@ def draw_dialogue_window() -> None:
         border_radius=8,
     )
 
-    placeholder = "질문을 입력하고 Enter..."
-    draw_text(
-        screen,
-        clip_text_to_width(visible_input_text(placeholder), FONT_SM, input_rect.width - 28),
-        (324, 620),
-        FONT_SM,
-        COLORS["text"] if state.input_text or state.composing_text else COLORS["muted"],
+    input_color = (
+        COLORS["text"]
+        if state.input_text or state.composing_text
+        else COLORS["muted"]
     )
+    input_y = input_rect.y + 10
+    for line in input_lines:
+        screen.blit(FONT_SM.render(line, True, input_color), (324, input_y))
+        input_y += input_line_height
 
     draw_text(
         screen,
         "ESC  돌아가기",
-        (860, 390),
+        (860, 390 - dialogue_growth),
         FONT_SM,
         COLORS["muted"],
     )
@@ -2133,6 +2144,8 @@ def move_player(keys) -> None:
 
 
 TEXT_INPUT_MODES = ("dialogue", "judge", "clue")
+BACKSPACE_REPEAT_DELAY_MS = 400
+BACKSPACE_REPEAT_INTERVAL_MS = 45
 
 
 def set_mode(mode: str) -> None:
@@ -2309,10 +2322,17 @@ def visible_input_text(placeholder: str) -> str:
     return placeholder
 
 
+def delete_input_characters(count: int = 1) -> None:
+    """현재 입력값의 마지막 문자를 count개까지 안전하게 지운다."""
+    if count > 0:
+        state.input_text = state.input_text[:-count]
+
+
 def main() -> None:
     global SHOW_COLLISION_DEBUG
 
     running = True
+    backspace_next_repeat: Optional[int] = None
 
     while running:
         clock.tick(FPS)
@@ -2358,6 +2378,10 @@ def main() -> None:
                 if state.mode in ("dialogue", "judge", "clue"):
                     append_input_text(event.text)
                     state.composing_text = ""
+
+            elif event.type == pygame.KEYUP:
+                if event.key == pygame.K_BACKSPACE:
+                    backspace_next_repeat = None
 
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_F2:
@@ -2415,21 +2439,30 @@ def main() -> None:
                         state.composing_text = ""
                         submit_dialogue()
                     elif event.key == pygame.K_BACKSPACE:
-                        state.input_text = state.input_text[:-1]
+                        delete_input_characters()
+                        backspace_next_repeat = (
+                            pygame.time.get_ticks() + BACKSPACE_REPEAT_DELAY_MS
+                        )
 
                 elif state.mode == "judge":
                     if event.key == pygame.K_RETURN:
                         state.composing_text = ""
                         submit_judge()
                     elif event.key == pygame.K_BACKSPACE:
-                        state.input_text = state.input_text[:-1]
+                        delete_input_characters()
+                        backspace_next_repeat = (
+                            pygame.time.get_ticks() + BACKSPACE_REPEAT_DELAY_MS
+                        )
 
                 elif state.mode == "clue":
                     if event.key == pygame.K_RETURN:
                         state.composing_text = ""
                         submit_clue_password()
                     elif event.key == pygame.K_BACKSPACE:
-                        state.input_text = state.input_text[:-1]
+                        delete_input_characters()
+                        backspace_next_repeat = (
+                            pygame.time.get_ticks() + BACKSPACE_REPEAT_DELAY_MS
+                        )
 
                 elif state.mode == "result":
                     if event.key == pygame.K_DOWN:
@@ -2440,6 +2473,26 @@ def main() -> None:
                         scroll_result(8)
                     elif event.key == pygame.K_PAGEUP:
                         scroll_result(-8)
+
+        if backspace_next_repeat is not None:
+            keys = pygame.key.get_pressed()
+            if (
+                state.mode not in TEXT_INPUT_MODES
+                or not keys[pygame.K_BACKSPACE]
+            ):
+                backspace_next_repeat = None
+            else:
+                now = pygame.time.get_ticks()
+                if now >= backspace_next_repeat:
+                    repeat_count = (
+                        1
+                        + (now - backspace_next_repeat)
+                        // BACKSPACE_REPEAT_INTERVAL_MS
+                    )
+                    delete_input_characters(repeat_count)
+                    backspace_next_repeat += (
+                        repeat_count * BACKSPACE_REPEAT_INTERVAL_MS
+                    )
 
         if state.mode == "play":
             keys = pygame.key.get_pressed()
