@@ -178,6 +178,21 @@ def draw_text(
     return y
 
 
+def clip_text_to_width(text: str, font: pygame.font.Font, max_width: int) -> str:
+    """텍스트가 max_width보다 넓으면 앞부분을 잘라, 가장 최근에 입력한
+    뒷부분(오른쪽 끝)이 보이도록 한다. 한 줄짜리 입력창에서 커서를
+    따라가는 효과를 낸다."""
+    if font.size(text)[0] <= max_width:
+        return text
+
+    for start in range(len(text)):
+        candidate = text[start:]
+        if font.size(candidate)[0] <= max_width:
+            return candidate
+
+    return text[-1:] if text else text
+
+
 def load_background() -> Optional[pygame.Surface]:
     if not os.path.exists(BACKGROUND_PATH):
         print(f"[WARN] 배경 이미지가 없습니다: {BACKGROUND_PATH}")
@@ -352,7 +367,7 @@ NOTE_ICON_RECT = pygame.Rect(1060, 50, 40, 40)
 NOTE_CLUE_RECTS: list[tuple[str, pygame.Rect]] = []
 
 # 상단 바에서 질문권 표시와 키 설명 사이, 중앙에 놓이는 추리 제출 타이머/버튼.
-DEDUCTION_BOX_RECT = pygame.Rect(WIDTH // 2 - 105, 7, 210, 26)
+DEDUCTION_BOX_RECT = pygame.Rect(WIDTH // 2 - 120, 5, 240, 30)
 
 
 # ------------------------------------------------------------
@@ -1241,9 +1256,9 @@ def draw_deduction_timer() -> None:
     pygame.draw.rect(screen, (30, 22, 18), box, border_radius=6)
     pygame.draw.rect(screen, COLORS["line"], box, 2, border_radius=6)
 
-    text_w = FONT_SM.size(label)[0]
+    text_w = FONT.size(label)[0]
     draw_text(
-        screen, label, (box.centerx - text_w // 2, box.y + 5), FONT_SM, text_color,
+        screen, label, (box.centerx - text_w // 2, box.centery - FONT.get_height() // 2), FONT, text_color,
     )
 
 
@@ -1748,7 +1763,9 @@ def draw_clue_window() -> None:
             pygame.draw.rect(screen, COLORS["line"], input_rect, 2, border_radius=8)
             draw_text(
                 screen,
-                visible_input_text("비밀번호 입력 후 Enter"),
+                clip_text_to_width(
+                    visible_input_text("비밀번호 입력 후 Enter"), FONT_SM, input_rect.width - 24
+                ),
                 (182, y + 48),
                 FONT_SM,
                 COLORS["text"] if state.input_text or state.composing_text else COLORS["muted"],
@@ -1816,7 +1833,7 @@ def draw_dialogue_window() -> None:
     placeholder = "질문을 입력하고 Enter..."
     draw_text(
         screen,
-        visible_input_text(placeholder),
+        clip_text_to_width(visible_input_text(placeholder), FONT_SM, input_rect.width - 28),
         (324, 620),
         FONT_SM,
         COLORS["text"] if state.input_text or state.composing_text else COLORS["muted"],

@@ -35,7 +35,9 @@
       "Bash(\"./venv/Scripts/python.exe\" -m pip install --upgrade --force-reinstall pip)",
       "Bash(\"./.venv/Scripts/python.exe\" --version)",
       "Bash(powershell -NoProfile -Command 'Test-Path $PROFILE; $PROFILE')",
-      "Bash(\"./venv/Scripts/python.exe\" -m py_compile main.py)"
+      "Bash(\"./venv/Scripts/python.exe\" -m py_compile main.py)",
+      "Bash(./venv/Scripts/python.exe -c ' *)",
+      "Bash(SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./venv/Scripts/python.exe -c ' *)"
     ]
   }
 }
