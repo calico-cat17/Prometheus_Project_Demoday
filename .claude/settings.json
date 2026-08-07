@@ -15,7 +15,27 @@
       "Bash(python -c ' *)",
       "Bash(powershell -NoProfile -Command ' *)",
       "Bash(python -m py_compile main.py game_engine.py)",
-      "Bash(timeout 20 python -c \"import main\")"
+      "Bash(timeout 20 python -c \"import main\")",
+      "PowerShell(& \"c:\\\\Users\\\\hibab\\\\Desktop\\\\Prometheus_Demoday_Project\\\\Prometheus_Project_Demoday\\\\.venv\\\\Scripts\\\\python.exe\" --version)",
+      "Bash(echo \"exit code: $?\")",
+      "Bash(\"./.venv/Scripts/python.exe\" -m pip freeze)",
+      "Bash(tasklist)",
+      "Bash(rm -rf \"./venv\")",
+      "Bash(mv \"./.venv\" \"./venv\")",
+      "Bash(\"./venv/Scripts/python.exe\" --version)",
+      "Bash(\"./venv/Scripts/pip.exe\" --version)",
+      "Bash(\"./venv/Scripts/python.exe\" -m pip --version)",
+      "Bash(echo \"EXIT CODE: $?\")",
+      "Bash(\"./venv/Scripts/python.exe\" -m pip install --upgrade --force-reinstall --no-deps -r requirements.txt)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(\"./venv/Scripts/accelerate.exe\" --version)",
+      "Bash(\"./venv/Scripts/python.exe\" -c \"import pygame, dotenv, anthropic, openai; print\\('imports OK'\\)\")",
+      "Bash(echo \"exit direct: $?\")",
+      "Bash(cmd //c \"venv\\\\\\\\Scripts\\\\\\\\pip.exe --version\")",
+      "Bash(\"./venv/Scripts/python.exe\" -m pip install --upgrade --force-reinstall pip)",
+      "Bash(\"./.venv/Scripts/python.exe\" --version)",
+      "Bash(powershell -NoProfile -Command 'Test-Path $PROFILE; $PROFILE')",
+      "Bash(\"./venv/Scripts/python.exe\" -m py_compile main.py)"
     ]
   }
 }

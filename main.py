@@ -33,7 +33,7 @@ else:
 # 조작
 #   WASD : 이동
 #   Q    : 문 열기/닫기, 단서 확인, NPC 대화, 사건 추론
-#   ESC  : 창 닫기 / 게임 종료
+#   ESC  : 단서/대화/추리 창 닫기
 #   Enter: 대화 입력 / 추리 제출
 #   F11  : 전체화면 전환
 #
@@ -675,7 +675,8 @@ for npc_id, npc in NPCS.items():
 # ------------------------------------------------------------
 # 플레이어 / 충돌
 # ------------------------------------------------------------
-player = pygame.Rect(500, 570, 28, 36)
+PLAYER_SPAWN = (500, 570)
+player = pygame.Rect(*PLAYER_SPAWN, 28, 36)
 player_speed = 3.2
 player_facing = "left"  # player.png art faces left by default
 PLAYER_SPRITE_RIGHT = pygame.transform.flip(PLAYER_SPRITE, True, False)
@@ -1584,7 +1585,7 @@ def draw_start_screen() -> None:
         "F11 : 전체화면 전환",
         "Enter : 입력",
         "/ : 최종 추리 제출",
-        "ESC : 창 닫기 / 게임 종료",
+        "ESC : 창 닫기(단서/대화/추리 창)",
     ]
 
     control_x = x + 18
@@ -2045,9 +2046,6 @@ def draw_result_window() -> None:
         COLORS["light"],
     )
 
-    draw_text(screen, "ESC: 돌아가기", (806, 632), FONT_XS, COLORS["muted"])
-
-
 def draw_judging_window() -> None:
     rect = pygame.Rect(330, 245, 460, 190)
     draw_panel(rect, "사건 추론 중")
@@ -2263,7 +2261,7 @@ def retry_game() -> None:
         dialogue_session.reset()
     for door in doors:
         door.open = False
-    player = pygame.Rect(545, 650, 28, 36)
+    player = pygame.Rect(*PLAYER_SPAWN, 28, 36)
 
 
 def active_input_limit() -> int:
@@ -2372,17 +2370,17 @@ def main() -> None:
                         state.notify("제한 시간이 종료되어 추리 제출을 취소할 수 없습니다.")
                         continue
 
+                    if state.mode == "result":
+                        continue
+
                     if state.mode in [
                         "clue",
                         "dialogue",
                         "judge",
-                        "result",
                     ]:
                         set_mode("play")
                         state.input_text = ""
                         state.composing_text = ""
-                    else:
-                        running = False
 
                 elif state.mode == "start":
                     if event.key in (pygame.K_RETURN, pygame.K_SPACE):
